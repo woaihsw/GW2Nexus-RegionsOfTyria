@@ -1,0 +1,46 @@
+name: Windows Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Integrate vcpkg
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT "vcpkg.exe"
+          if (!(Test-Path $vcpkg)) {
+            $vcpkg = "vcpkg"
+          }
+          & $vcpkg integrate install
+
+      - name: Build Release x64
+        run: >
+          msbuild GW2Nexus-RegionsDisplay.sln
+          /m
+          /restore
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:VcpkgEnableManifest=true
+          /p:VcpkgUseStatic=true
+          /p:VcpkgTriplet=x64-windows-static
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: RegionsDisplay
+          path: x64/RegionsDisplay.dll
+          if-no-files-found: error

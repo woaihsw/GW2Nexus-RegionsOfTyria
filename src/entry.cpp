@@ -33,6 +33,7 @@ void ReceiveFont(const char* aIdentifier, void* aFont);
 void loadFonts();
 void loadFontsThreaded();
 void releaseFonts();
+bool loadCjkFonts(const std::string& addonFolder);
 // Keybinds
 void ProcessKeybind(const char* aIdentifer, bool aIsRelease);
 // Events
@@ -113,6 +114,7 @@ char displayFormatSmallBuffer[100] = "";
 char displayFormatLargeBuffer[100] = "";
 
 std::mutex identityMutex;
+ImVector<ImWchar> cjkGlyphRanges;
 
 /* services */
 Renderer renderer;
@@ -238,6 +240,18 @@ void ReceiveFont(const char* aIdentifier, void* aFont) {
 	else if (str == "ROT_FONT_GENERIC_WIDGET")
 	{
 		renderer.registerFont(fontNameGenericWidget, (ImFont*)aFont);
+	}
+	else if (str == "ROT_FONT_CJK_SMALL")
+	{
+		renderer.registerFont(fontNameCjkSmall, (ImFont*)aFont);
+	}
+	else if (str == "ROT_FONT_CJK_LARGE")
+	{
+		renderer.registerFont(fontNameCjkLarge, (ImFont*)aFont);
+	}
+	else if (str == "ROT_FONT_CJK_WIDGET")
+	{
+		renderer.registerFont(fontNameCjkWidget, (ImFont*)aFont);
 	}
 	else if (str == "ROT_FONT_ASURA_SMALL")
 	{
@@ -814,6 +828,63 @@ void loadFont(std::string id, float size, std::string filename) {
 	APIDefs->Fonts.AddFromFile(id.c_str(), size > 0 ? size : 10, filename.c_str(), ReceiveFont, nullptr);
 }
 
+std::string getSystemCjkFontPath() {
+	std::vector<std::string> candidates = {
+		"C:/Windows/Fonts/msyh.ttc",
+		"C:/Windows/Fonts/simsun.ttc",
+		"C:/Windows/Fonts/Deng.ttf",
+		"C:/Windows/Fonts/msjh.ttc"
+	};
+
+	for (const auto& candidate : candidates) {
+		if (fs::exists(candidate)) {
+			return candidate;
+		}
+	}
+
+	return "";
+}
+
+const ImWchar* getCjkGlyphRanges(const std::string& addonFolder) {
+	if (cjkGlyphRanges.Size > 0) {
+		return cjkGlyphRanges.Data;
+	}
+
+	ImFontGlyphRangesBuilder builder;
+	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesDefault());
+
+	std::ifstream zhData(addonFolder + "/zh.json", std::ios::binary);
+	if (zhData.is_open()) {
+		std::stringstream buffer;
+		buffer << zhData.rdbuf();
+		builder.AddText(buffer.str().c_str());
+	}
+	else {
+		builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
+	}
+
+	builder.BuildRanges(&cjkGlyphRanges);
+	return cjkGlyphRanges.Data;
+}
+
+bool loadCjkFonts(const std::string& addonFolder) {
+	std::string cjkFontPath = getSystemCjkFontPath();
+	if (cjkFontPath.empty()) {
+		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "No system CJK font found. Chinese text may use ImGui fallback glyphs.");
+		return false;
+	}
+
+	static ImFontConfig cjkFontConfig;
+	cjkFontConfig.OversampleH = 1;
+	cjkFontConfig.OversampleV = 1;
+	cjkFontConfig.GlyphRanges = getCjkGlyphRanges(addonFolder);
+
+	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_SMALL", settings.fontSettings[0].smallFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
+	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_LARGE", settings.fontSettings[0].largeFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
+	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_WIDGET", settings.fontSettings[0].widgetFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
+	return true;
+}
+
 void loadFonts() {
 	std::string pathFolder = APIDefs->Paths.GetAddonDirectory(ADDON_NAME);
 	loadFont("ROT_FONT_GENERIC_SMALL", settings.fontSettings[0].smallFontSize, (pathFolder + "/font_generic.ttf").c_str());
@@ -848,6 +919,8 @@ void loadFonts() {
 	loadFont("ROT_FONT_NORN_ANIM_LARGE", settings.fontSettings[4].largeFontSize, (pathFolder + "/fonts_norn_anim.ttf").c_str());
 	loadFont("ROT_FONT_SYLVARI_ANIM_SMALL", settings.fontSettings[5].smallFontSize, (pathFolder + "/fonts_sylvari_anim.ttf").c_str());
 	loadFont("ROT_FONT_SYLVARI_ANIM_LARGE", settings.fontSettings[5].largeFontSize, (pathFolder + "/fonts_sylvari_anim.ttf").c_str());
+
+	loadCjkFonts(pathFolder);
 }	
 
 
@@ -876,6 +949,9 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_WIDGET", ReceiveFont);
+	APIDefs->Fonts.Release("ROT_FONT_CJK_SMALL", ReceiveFont);
+	APIDefs->Fonts.Release("ROT_FONT_CJK_LARGE", ReceiveFont);
+	APIDefs->Fonts.Release("ROT_FONT_CJK_WIDGET", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_WIDGET", ReceiveFont);

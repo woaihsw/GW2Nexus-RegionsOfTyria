@@ -19,6 +19,10 @@ const std::string fontNameGenericLarge = "fontGenericLarge";
 const std::string fontNameGenericSmall = "fontGenericSmall";
 const std::string fontNameGenericWidget = "fontNameGenericWidget";
 
+const std::string fontNameCjkLarge = "fontCjkLarge";
+const std::string fontNameCjkSmall = "fontCjkSmall";
+const std::string fontNameCjkWidget = "fontNameCjkWidget";
+
 const std::string fontNameCharrLarge = "fontCharrLarge";
 const std::string fontNameCharrSmall = "fontCharrSmall";
 const std::string fontNameCharrWidget = "fontNameCharrWidget";

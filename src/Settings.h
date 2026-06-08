@@ -9,8 +9,8 @@ enum class Locale {
 	En,
 	De,
 	Es,
-	Fr
-	//Zh << in theory we have the data, but in reality it isn't being rendered properly at all
+	Fr,
+	Zh
 };
 inline void to_json(json& j, const Locale& locale) {
     switch (locale) {
@@ -18,7 +18,7 @@ inline void to_json(json& j, const Locale& locale) {
     case Locale::De: j = "de"; break;
     case Locale::Es: j = "es"; break;
     case Locale::Fr: j = "fr"; break;
-    //case Locale::Zh: j = "zh"; break;
+    case Locale::Zh: j = "zh"; break;
 
     default: throw std::invalid_argument("Invalid color value");
     }
@@ -37,9 +37,9 @@ inline void from_json(const json& j, Locale& locale) {
     else if (colorStr == "fr") {
         locale = Locale::Fr;
     }
-    //else if (colorStr == "zh") {
-    //    locale = Locale::Zh;
-    //}
+    else if (colorStr == "zh") {
+        locale = Locale::Zh;
+    }
     else {
         throw std::invalid_argument("Invalid locale value");
     }
@@ -53,7 +53,7 @@ inline const std::string GetLocaleAsString(Locale value) {
     case Locale::De: return "de";
     case Locale::Es: return "es";
     case Locale::Fr: return "fr";
-    //case Locale::Zh: return "zh";
+    case Locale::Zh: return "zh";
     default: return "Unknown";
     }
 }
@@ -70,8 +70,8 @@ inline std::vector<LocaleItem> localeItems = {
     { Locale::En, "en", "English" },
     { Locale::De, "de", "Deutsch" },
     { Locale::Es, "es", "Español" },
-    { Locale::Fr, "fr", "Français" }
-    //{ Locale::Zh, "zh", "中文" }
+    { Locale::Fr, "fr", "Français" },
+    { Locale::Zh, "zh", "中文" }
 };
 
 /// ================================================================================

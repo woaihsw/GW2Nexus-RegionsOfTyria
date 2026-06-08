@@ -28,6 +28,64 @@ bool fontsPicked;
 bool fontsLoaded = false;
 int expectedFontCount = 30;
 
+static ImWchar decodeUtf8Character(const char* text, int& charLength) {
+	charLength = 1;
+	unsigned char c = static_cast<unsigned char>(*text);
+
+	if (c < 0x80) {
+		return c;
+	}
+
+	auto isContinuation = [](const char* p) {
+		return *p != '\0' && (static_cast<unsigned char>(*p) & 0xC0) == 0x80;
+	};
+
+	if ((c & 0xE0) == 0xC0 && isContinuation(text + 1)) {
+		charLength = 2;
+		ImWchar character = static_cast<ImWchar>((c & 0x1F) << 6);
+		character |= static_cast<unsigned char>(text[1]) & 0x3F;
+		return character;
+	}
+
+	if ((c & 0xF0) == 0xE0 && isContinuation(text + 1) && isContinuation(text + 2)) {
+		charLength = 3;
+		ImWchar character = static_cast<ImWchar>((c & 0x0F) << 12);
+		character |= (static_cast<unsigned char>(text[1]) & 0x3F) << 6;
+		character |= static_cast<unsigned char>(text[2]) & 0x3F;
+		return character;
+	}
+
+	if ((c & 0xF8) == 0xF0 && isContinuation(text + 1) && isContinuation(text + 2) && isContinuation(text + 3)) {
+		charLength = 4;
+		ImWchar character = static_cast<ImWchar>((c & 0x07) << 18);
+		character |= (static_cast<unsigned char>(text[1]) & 0x3F) << 12;
+		character |= (static_cast<unsigned char>(text[2]) & 0x3F) << 6;
+		character |= static_cast<unsigned char>(text[3]) & 0x3F;
+		return character;
+	}
+
+	return c;
+}
+
+static bool fontCanRenderText(ImFont* font, const char* text) {
+	if (font == nullptr || !font->IsLoaded()) return false;
+
+	for (const char* p = text; *p;) {
+		int charLength = 1;
+		ImWchar character = decodeUtf8Character(p, charLength);
+		if (font->FindGlyphNoFallback(character) == nullptr) {
+			return false;
+		}
+		p += charLength;
+	}
+
+	return true;
+}
+
+static bool isCoreFont(const std::string& name) {
+	return name != fontNameCjkSmall && name != fontNameCjkLarge && name != fontNameCjkWidget;
+}
+
 Renderer::Renderer() {}
 Renderer::~Renderer() {}
 
@@ -81,13 +139,43 @@ void Renderer::registerFont(std::string name, ImFont* font) {
 		fonts.emplace(name, font);
 	}
 
-	if (fonts.size() == expectedFontCount) {
+	int coreFontCount = 0;
+	for (const auto& font : fonts) {
+		if (isCoreFont(font.first)) {
+			coreFontCount++;
+		}
+	}
+
+	if (coreFontCount >= expectedFontCount) {
 		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "All fonts loaded and registered with the renderer.");
 		fontsLoaded = true;
 	}
 	else {
 		fontsLoaded = false;
 	}
+}
+
+ImFont* Renderer::getLoadedFont(const std::string& name) {
+	if (!fonts.contains(name)) return nullptr;
+	ImFont* font = fonts[name];
+	if (font == nullptr || !font->IsLoaded()) return nullptr;
+	return font;
+}
+
+ImFont* Renderer::getRenderableFontForText(ImFont* preferred, ImFont* fallback, const char* text) {
+	if (fontCanRenderText(preferred, text)) return preferred;
+	if (fontCanRenderText(fallback, text)) return fallback;
+	return preferred != nullptr ? preferred : fallback;
+}
+
+ImFont* Renderer::getRenderableFontForCharacter(ImFont* preferred, ImFont* fallback, ImWchar character) {
+	if (preferred != nullptr && preferred->IsLoaded() && preferred->FindGlyphNoFallback(character) != nullptr) {
+		return preferred;
+	}
+	if (fallback != nullptr && fallback->IsLoaded() && fallback->FindGlyphNoFallback(character) != nullptr) {
+		return fallback;
+	}
+	return preferred != nullptr ? preferred : fallback;
 }
 
 void Renderer::updateFontSettings() {
@@ -306,9 +394,13 @@ void Renderer::renderMinimapWidget() {
 
 	std::string output = fontSettings->widgetDisplayFormat;
 	output = replacePlaceholderTexts(output, false);
+	ImFont* renderFontWidget = getRenderableFontForText(fontWidget, getLoadedFont(fontNameCjkWidget), output.c_str());
+	if (renderFontWidget == nullptr) {
+		renderFontWidget = fontWidget;
+	}
 
 	// calculate text size
-	ImGui::PushFont(fontWidget);
+	ImGui::PushFont(renderFontWidget);
 	ImVec2 textSize = ImGui::CalcTextSize(output.c_str());
 	ImGui::PopFont();
 	ImVec4 textColor = ImVec4(fontSettings->widgetFontColor[0], fontSettings->widgetFontColor[1], fontSettings->widgetFontColor[2], 1.0f);
@@ -321,7 +413,7 @@ void Renderer::renderMinimapWidget() {
 	ImGui::SetNextWindowBgAlpha(settings.widgetBackgroundOpacity);
 
 	if (ImGui::Begin("MiniSectorWidget", (bool*)0, flags)) {
-		ImGui::PushFont(fontWidget);
+		ImGui::PushFont(renderFontWidget);
 		// alignment left - center - right
 		float textX;
 		switch (settings.widgetTextAlign) {
@@ -654,45 +746,15 @@ void Renderer::renderTextAnimation(const char* text, float opacityOverride, bool
 
 	for (const char* p = text; *p;) {
 		int char_len = 1;
-		/*
-		if ((*p & 0x80) == 0) char_len = 1;       // 0xxxxxxx
-		if ((*p & 0xE0) == 0xC0) char_len = 2;    // 110xxxxx
-		if ((*p & 0xF0) == 0xE0) char_len = 3;    // 1110xxxx
-		if ((*p & 0xF8) == 0xF0) char_len = 4;    // 11110xxx
-		*/
-
-		// Decode UTF-8 manually
-		ImWchar character = 0;
-		unsigned char c = (unsigned char)*p;
-		if (c < 0x80) {
-			// Single-byte character (ASCII)
-			character = c;
-			char_len = 1;
-		}
-		else if ((c & 0xE0) == 0xC0) {
-			// Two-byte character (110xxxxx 10xxxxxx)
-			character = (ImWchar)((c & 0x1F) << 6);
-			character |= (p[1] & 0x3F);
-			char_len = 2;
-		}
-		else if ((c & 0xF0) == 0xE0) {
-			// Three-byte character (1110xxxx 10xxxxxx 10xxxxxx)
-			character = (ImWchar)((c & 0x0F) << 12);
-			character |= (p[1] & 0x3F) << 6;
-			character |= (p[2] & 0x3F);
-			char_len = 3;
-		}
-		else if ((c & 0xF8) == 0xF0) {
-			// Four-byte character (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-			character = (ImWchar)((c & 0x07) << 18);
-			character |= (p[1] & 0x3F) << 12;
-			character |= (p[2] & 0x3F) << 6;
-			character |= (p[3] & 0x3F);
-			char_len = 4;
-		}
+		ImWchar character = decodeUtf8Character(p, char_len);
 
 		// Pick font based on opacity; lower opacity more favorably to secondary
 		ImFont* selectedFont = (opacityOverride < 1.0f && ((float)rand() / RAND_MAX) > opacityOverride) ? secondary : main;
+		ImFont* fallbackFont = getLoadedFont(large ? fontNameCjkLarge : fontNameCjkSmall);
+		if (fallbackFont == nullptr) {
+			fallbackFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
+		}
+		selectedFont = getRenderableFontForCharacter(selectedFont, fallbackFont, character);
 		
 		// Align height to center with main font
 		ImGui::PushFont(selectedFont);
@@ -731,20 +793,9 @@ void Renderer::renderTextAnimation(const char* text, float opacityOverride, bool
 		ImGui::PopFont();
 		
 		if (p[char_len]) {	
-			ImGui::PushFont(main);
-			//currentX += ImGui::CalcTextSize(p, p + char_len).x * NexusLink->Scaling;
-
-			float kerning = 0.0f;
-
-			if (char_len == 1) {
-				// ez, just use the current character
-				kerning = main->FindGlyph((ImWchar)*p)->AdvanceX;
-			}
-			else {
-				// hard, because fuck it that's why
-				kerning = main->FindGlyph(character)->AdvanceX;
-			}
-			currentX += kerning * NexusLink->Scaling;
+			ImFont* advanceFont = getRenderableFontForCharacter(main, fallbackFont, character);
+			ImGui::PushFont(advanceFont);
+			currentX += ImGui::CalcTextSize(p, p + char_len).x * NexusLink->Scaling;
 
 			ImGui::PopFont();
 			ImGui::SetCursorPos(ImVec2(currentX, originalCursorPos.y));
