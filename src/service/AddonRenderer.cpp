@@ -83,7 +83,11 @@ static bool fontCanRenderText(ImFont* font, const char* text) {
 }
 
 static bool isCoreFont(const std::string& name) {
-	return name != fontNameCjkSmall && name != fontNameCjkLarge && name != fontNameCjkWidget;
+	return name != fontNameCjkSmall &&
+		name != fontNameCjkLarge &&
+		name != fontNameCjkWidget &&
+		name != fontNameCjkAnimSmall &&
+		name != fontNameCjkAnimLarge;
 }
 
 Renderer::Renderer() {}
@@ -176,6 +180,28 @@ ImFont* Renderer::getRenderableFontForCharacter(ImFont* preferred, ImFont* fallb
 		return fallback;
 	}
 	return preferred != nullptr ? preferred : fallback;
+}
+
+float Renderer::calculateRenderedTextWidth(ImFont* preferred, ImFont* fallback, const char* text) {
+	if (text == nullptr) return 0.0f;
+
+	float width = 0.0f;
+	float scaling = NexusLink != nullptr && NexusLink->Scaling > 0.0f ? NexusLink->Scaling : 1.0f;
+	for (const char* p = text; *p;) {
+		int charLength = 1;
+		ImWchar character = decodeUtf8Character(p, charLength);
+		ImFont* renderFont = getRenderableFontForCharacter(preferred, fallback, character);
+
+		if (renderFont != nullptr) {
+			ImGui::PushFont(renderFont);
+			width += ImGui::CalcTextSize(p, p + charLength).x * scaling;
+			ImGui::PopFont();
+		}
+
+		p += charLength;
+	}
+
+	return width;
 }
 
 void Renderer::updateFontSettings() {
@@ -748,13 +774,19 @@ void Renderer::renderTextAnimation(const char* text, float opacityOverride, bool
 		int char_len = 1;
 		ImWchar character = decodeUtf8Character(p, char_len);
 
-		// Pick font based on opacity; lower opacity more favorably to secondary
-		ImFont* selectedFont = (opacityOverride < 1.0f && ((float)rand() / RAND_MAX) > opacityOverride) ? secondary : main;
+		// Pick font based on opacity; lower opacity more favorably to secondary.
+		bool useSecondary = !settings.disableAnimations && opacityOverride < 1.0f && ((float)rand() / RAND_MAX) > opacityOverride;
+		ImFont* selectedFont = useSecondary ? secondary : main;
 		ImFont* fallbackFont = getLoadedFont(large ? fontNameCjkLarge : fontNameCjkSmall);
-		if (fallbackFont == nullptr) {
-			fallbackFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
+		ImFont* fallbackAnimFont = getLoadedFont(large ? fontNameCjkAnimLarge : fontNameCjkAnimSmall);
+		if (fallbackAnimFont == nullptr) {
+			fallbackAnimFont = fallbackFont;
 		}
-		selectedFont = getRenderableFontForCharacter(selectedFont, fallbackFont, character);
+		ImFont* selectedFallbackFont = useSecondary ? fallbackAnimFont : fallbackFont;
+		if (selectedFallbackFont == nullptr) {
+			selectedFallbackFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
+		}
+		selectedFont = getRenderableFontForCharacter(selectedFont, selectedFallbackFont, character);
 		
 		// Align height to center with main font
 		ImGui::PushFont(selectedFont);
@@ -793,6 +825,9 @@ void Renderer::renderTextAnimation(const char* text, float opacityOverride, bool
 		ImGui::PopFont();
 		
 		if (p[char_len]) {	
+			if (fallbackFont == nullptr) {
+				fallbackFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
+			}
 			ImFont* advanceFont = getRenderableFontForCharacter(main, fallbackFont, character);
 			ImGui::PushFont(advanceFont);
 			currentX += ImGui::CalcTextSize(p, p + char_len).x * NexusLink->Scaling;
@@ -817,11 +852,11 @@ void Renderer::centerText(std::string text, float textY, float opacityOverride) 
 		text = "The Unknown";
 	}
 
-	// Center Text voodoo
-	ImGui::PushFont(fontLarge);
-	ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-	float textX = (windowSize.x - textSize.x) / 2.0f;
-	ImGui::PopFont();
+	ImFont* fallbackFont = getLoadedFont(fontNameCjkLarge);
+	if (fallbackFont == nullptr) {
+		fallbackFont = (ImFont*)NexusLink->FontBig;
+	}
+	float textX = (windowSize.x - calculateRenderedTextWidth(fontLarge, fallbackFont, text.c_str())) / 2.0f;
 
 	int offset = fontSettings->fontBorderOffset;
 	if (fontSettings->fontBorderMode == 0) {
@@ -842,11 +877,11 @@ void Renderer::centerTextSmall(std::string text, float textY, float opacityOverr
 	ImGuiIO& io = ImGui::GetIO();
 	ImVec2 windowSize = io.DisplaySize;
 
-	// Center Text voodoo
-	ImGui::PushFont(fontSmall);
-	ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-	float textX = (windowSize.x - textSize.x) / 2.0f;
-	ImGui::PopFont();
+	ImFont* fallbackFont = getLoadedFont(fontNameCjkSmall);
+	if (fallbackFont == nullptr) {
+		fallbackFont = (ImFont*)NexusLink->Font;
+	}
+	float textX = (windowSize.x - calculateRenderedTextWidth(fontSmall, fallbackFont, text.c_str())) / 2.0f;
 
 	int offset = fontSettings->fontBorderOffset;
 	if (fontSettings->fontBorderMode == 0) {

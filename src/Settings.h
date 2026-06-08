@@ -68,10 +68,10 @@ struct LocaleItem {
 inline std::vector<LocaleItem> localeItems = {
     //{ Locale::Client, "client", "Same as client" },
     { Locale::En, "en", "English" },
-    { Locale::De, "de", "Deutsch" },
-    { Locale::Es, "es", "Español" },
-    { Locale::Fr, "fr", "Français" },
-    { Locale::Zh, "zh", "中文" }
+    { Locale::De, "de", "German" },
+    { Locale::Es, "es", "Spanish" },
+    { Locale::Fr, "fr", "French" },
+    { Locale::Zh, "zh", "Chinese" }
 };
 
 /// ================================================================================

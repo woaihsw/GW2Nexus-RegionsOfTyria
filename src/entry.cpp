@@ -262,6 +262,14 @@ void ReceiveFont(const char* aIdentifier, void* aFont) {
 	{
 		renderer.registerFont(fontNameCjkWidget, (ImFont*)aFont);
 	}
+	else if (str == "ROT_FONT_CJK_ANIM_SMALL")
+	{
+		renderer.registerFont(fontNameCjkAnimSmall, (ImFont*)aFont);
+	}
+	else if (str == "ROT_FONT_CJK_ANIM_LARGE")
+	{
+		renderer.registerFont(fontNameCjkAnimLarge, (ImFont*)aFont);
+	}
 	else if (str == "ROT_FONT_ASURA_SMALL")
 	{
 		renderer.registerFont(fontNameAsuraSmall, (ImFont*)aFont);
@@ -844,21 +852,35 @@ void loadFont(std::string id, float size, std::string filename) {
 	APIDefs->Fonts.AddFromFile(id.c_str(), size > 0 ? size : 10, filename.c_str(), ReceiveFont, nullptr);
 }
 
-std::string getSystemCjkFontPath() {
-	std::vector<std::string> candidates = {
+std::vector<std::string> getSystemCjkFontCandidates() {
+	return {
 		"C:/Windows/Fonts/msyh.ttc",
 		"C:/Windows/Fonts/simsun.ttc",
+		"C:/Windows/Fonts/simhei.ttf",
 		"C:/Windows/Fonts/Deng.ttf",
-		"C:/Windows/Fonts/msjh.ttc"
+		"C:/Windows/Fonts/msjh.ttc",
+		"C:/Windows/Fonts/mingliu.ttc"
 	};
+}
 
-	for (const auto& candidate : candidates) {
+std::string getSystemCjkFontPath() {
+	for (const auto& candidate : getSystemCjkFontCandidates()) {
 		if (fs::exists(candidate)) {
 			return candidate;
 		}
 	}
 
 	return "";
+}
+
+std::string getSystemCjkAnimationFontPath(const std::string& primaryFontPath) {
+	for (const auto& candidate : getSystemCjkFontCandidates()) {
+		if (candidate != primaryFontPath && fs::exists(candidate)) {
+			return candidate;
+		}
+	}
+
+	return primaryFontPath;
 }
 
 int getUtf8CharLength(const char* text) {
@@ -906,7 +928,13 @@ void registerCjkGlyphSeed(const std::string& addonFolder) {
 		appendUniqueUtf8Characters(uniqueSeed, seen, buffer.str());
 	}
 
-	APIDefs->Localization.Set("ROT_CJK_GLYPH_SEED", "en", uniqueSeed.c_str());
+	std::vector<std::string> languageIdentifiers = {
+		"en", "de", "es", "fr", "zh",
+		"en-GB", "en-US", "de-DE", "es-ES", "fr-FR", "zh-CN"
+	};
+	for (const auto& languageIdentifier : languageIdentifiers) {
+		APIDefs->Localization.Set("ROT_CJK_GLYPH_SEED", languageIdentifier.c_str(), uniqueSeed.c_str());
+	}
 	cjkGlyphSeedRegistered = true;
 	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Registered CJK glyph seed with " + std::to_string(seen.size()) + " unique non-ASCII characters.").c_str());
 }
@@ -937,6 +965,7 @@ bool loadCjkFonts(const std::string& addonFolder) {
 		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "No system CJK font found. Chinese text may use ImGui fallback glyphs.");
 		return false;
 	}
+	std::string cjkAnimFontPath = getSystemCjkAnimationFontPath(cjkFontPath);
 
 	static ImFontConfig cjkFontConfig;
 	cjkFontConfig = ImFontConfig();
@@ -956,6 +985,8 @@ bool loadCjkFonts(const std::string& addonFolder) {
 	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_SMALL", settings.fontSettings[0].smallFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
 	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_LARGE", settings.fontSettings[0].largeFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
 	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_WIDGET", settings.fontSettings[0].widgetFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
+	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_ANIM_SMALL", settings.fontSettings[0].smallFontSize, cjkAnimFontPath.c_str(), ReceiveFont, &cjkFontConfig);
+	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_ANIM_LARGE", settings.fontSettings[0].largeFontSize, cjkAnimFontPath.c_str(), ReceiveFont, &cjkFontConfig);
 	return true;
 }
 
@@ -1027,6 +1058,8 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_CJK_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_CJK_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_CJK_WIDGET", ReceiveFont);
+	APIDefs->Fonts.Release("ROT_FONT_CJK_ANIM_SMALL", ReceiveFont);
+	APIDefs->Fonts.Release("ROT_FONT_CJK_ANIM_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_WIDGET", ReceiveFont);

@@ -45,6 +45,7 @@ private:
 	ImFont* getLoadedFont(const std::string& name);
 	ImFont* getRenderableFontForText(ImFont* preferred, ImFont* fallback, const char* text);
 	ImFont* getRenderableFontForCharacter(ImFont* preferred, ImFont* fallback, ImWchar character);
+	float calculateRenderedTextWidth(ImFont* preferred, ImFont* fallback, const char* text);
 
 };
 
