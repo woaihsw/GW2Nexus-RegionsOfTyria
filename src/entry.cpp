@@ -16,6 +16,7 @@
 #include "Globals.h"
 
 #include <cstring> // For strcpy_s
+#include <unordered_set>
 
 /* proto */
 
@@ -34,6 +35,7 @@ void loadFonts();
 void loadFontsThreaded();
 void releaseFonts();
 bool loadCjkFonts(const std::string& addonFolder);
+void registerCjkGlyphSeed(const std::string& addonFolder);
 // Keybinds
 void ProcessKeybind(const char* aIdentifer, bool aIsRelease);
 // Events
@@ -116,6 +118,7 @@ char displayFormatLargeBuffer[100] = "";
 std::mutex identityMutex;
 ImVector<ImWchar> cjkGlyphRanges;
 ImFont* optionsCjkFont = nullptr;
+bool cjkGlyphSeedRegistered = false;
 
 /* services */
 Renderer renderer;
@@ -205,6 +208,7 @@ void AddonLoad(AddonAPI* aApi)
 	}
 
 	// Initialize the custom fonts
+	registerCjkGlyphSeed(getAddonFolder());
 	loadFonts();
 
 	// Start filling the inventory in the background
@@ -855,6 +859,56 @@ std::string getSystemCjkFontPath() {
 	}
 
 	return "";
+}
+
+int getUtf8CharLength(const char* text) {
+	unsigned char c = static_cast<unsigned char>(*text);
+	if (c < 0x80) return 1;
+	if ((c & 0xE0) == 0xC0) return 2;
+	if ((c & 0xF0) == 0xE0) return 3;
+	if ((c & 0xF8) == 0xF0) return 4;
+	return 1;
+}
+
+void appendUniqueUtf8Characters(std::string& target, std::unordered_set<std::string>& seen, const std::string& text) {
+	for (size_t i = 0; i < text.size();) {
+		unsigned char c = static_cast<unsigned char>(text[i]);
+		int charLength = getUtf8CharLength(text.c_str() + i);
+		if (i + charLength > text.size()) {
+			break;
+		}
+
+		if (c >= 0x80) {
+			std::string character = text.substr(i, charLength);
+			if (seen.insert(character).second) {
+				target.append(character);
+			}
+		}
+
+		i += charLength;
+	}
+}
+
+void registerCjkGlyphSeed(const std::string& addonFolder) {
+	if (cjkGlyphSeedRegistered || APIDefs == nullptr) {
+		return;
+	}
+
+	std::string seed = "Español Français 中文 泰瑞亚 科瑞塔 狮子拱门 迷雾之地";
+	std::unordered_set<std::string> seen;
+	std::string uniqueSeed;
+	appendUniqueUtf8Characters(uniqueSeed, seen, seed);
+
+	std::ifstream zhData(addonFolder + "/zh.json", std::ios::binary);
+	if (zhData.is_open()) {
+		std::stringstream buffer;
+		buffer << zhData.rdbuf();
+		appendUniqueUtf8Characters(uniqueSeed, seen, buffer.str());
+	}
+
+	APIDefs->Localization.Set("ROT_CJK_GLYPH_SEED", "en", uniqueSeed.c_str());
+	cjkGlyphSeedRegistered = true;
+	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Registered CJK glyph seed with " + std::to_string(seen.size()) + " unique non-ASCII characters.").c_str());
 }
 
 const ImWchar* getCjkGlyphRanges(const std::string& addonFolder) {
