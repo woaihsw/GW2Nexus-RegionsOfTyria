@@ -26,7 +26,7 @@ jobs:
             $vcpkg = "vcpkg"
           }
           & $vcpkg integrate install
-          & $vcpkg install nlohmann-json cpp-httplib openssl "imgui[dx11-binding,win32-binding]" --triplet x64-windows-static
+          & $vcpkg install --triplet x64-windows-static
 
       - name: Build Release x64
         run: >
@@ -35,7 +35,6 @@ jobs:
           /restore
           /p:Configuration=Release
           /p:Platform=x64
-          /p:VcpkgEnableManifest=false
           /p:VcpkgUseStatic=true
           /p:VcpkgTriplet=x64-windows-static
 
