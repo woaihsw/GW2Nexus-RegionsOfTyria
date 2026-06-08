@@ -25,8 +25,9 @@ jobs:
           if (!(Test-Path $vcpkg)) {
             $vcpkg = "vcpkg"
           }
+          $installRoot = Join-Path $PWD "vcpkg_installed\x64-windows-static"
           & $vcpkg integrate install
-          & $vcpkg install --triplet x64-windows-static
+          & $vcpkg install --triplet x64-windows-static "--x-install-root=$installRoot"
 
       - name: Build Release x64
         run: >
@@ -35,6 +36,7 @@ jobs:
           /restore
           /p:Configuration=Release
           /p:Platform=x64
+          /p:VcpkgManifestInstall=false
           /p:VcpkgUseStatic=true
           /p:VcpkgTriplet=x64-windows-static
 
