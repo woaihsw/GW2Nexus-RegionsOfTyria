@@ -115,6 +115,7 @@ char displayFormatLargeBuffer[100] = "";
 
 std::mutex identityMutex;
 ImVector<ImWchar> cjkGlyphRanges;
+ImFont* optionsCjkFont = nullptr;
 
 /* services */
 Renderer renderer;
@@ -240,6 +241,10 @@ void ReceiveFont(const char* aIdentifier, void* aFont) {
 	else if (str == "ROT_FONT_GENERIC_WIDGET")
 	{
 		renderer.registerFont(fontNameGenericWidget, (ImFont*)aFont);
+	}
+	else if (str == "ROT_FONT_CJK_OPTIONS")
+	{
+		optionsCjkFont = (ImFont*)aFont;
 	}
 	else if (str == "ROT_FONT_CJK_SMALL")
 	{
@@ -449,6 +454,10 @@ void AddonOptions()
 	ImGui::Separator();
 	ImGui::Text("Locale");
 	ImGui::Text("");
+	bool pushedLocaleFont = optionsCjkFont != nullptr && optionsCjkFont->IsLoaded();
+	if (pushedLocaleFont) {
+		ImGui::PushFont(optionsCjkFont);
+	}
 	for (auto item : localeItems) {
 		bool selected = settings.locale == item.value;
 		ImGui::SameLine();
@@ -459,6 +468,9 @@ void AddonOptions()
 				settings.locale = item.value;
 			}
 		}
+	}
+	if (pushedLocaleFont) {
+		ImGui::PopFont();
 	}
 
 	ImGui::Separator();
@@ -852,15 +864,13 @@ const ImWchar* getCjkGlyphRanges(const std::string& addonFolder) {
 
 	ImFontGlyphRangesBuilder builder;
 	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesDefault());
+	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
 
 	std::ifstream zhData(addonFolder + "/zh.json", std::ios::binary);
 	if (zhData.is_open()) {
 		std::stringstream buffer;
 		buffer << zhData.rdbuf();
 		builder.AddText(buffer.str().c_str());
-	}
-	else {
-		builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
 	}
 
 	builder.BuildRanges(&cjkGlyphRanges);
@@ -875,10 +885,20 @@ bool loadCjkFonts(const std::string& addonFolder) {
 	}
 
 	static ImFontConfig cjkFontConfig;
+	cjkFontConfig = ImFontConfig();
 	cjkFontConfig.OversampleH = 1;
 	cjkFontConfig.OversampleV = 1;
 	cjkFontConfig.GlyphRanges = getCjkGlyphRanges(addonFolder);
 
+	float optionsFontSize = 16.0f;
+	if (NexusLink != nullptr && NexusLink->FontUI != nullptr) {
+		optionsFontSize = ((ImFont*)NexusLink->FontUI)->FontSize;
+	}
+	else if (NexusLink != nullptr && NexusLink->Font != nullptr) {
+		optionsFontSize = ((ImFont*)NexusLink->Font)->FontSize;
+	}
+
+	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_OPTIONS", optionsFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
 	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_SMALL", settings.fontSettings[0].smallFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
 	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_LARGE", settings.fontSettings[0].largeFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
 	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_WIDGET", settings.fontSettings[0].widgetFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
@@ -949,6 +969,7 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_WIDGET", ReceiveFont);
+	APIDefs->Fonts.Release("ROT_FONT_CJK_OPTIONS", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_CJK_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_CJK_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_CJK_WIDGET", ReceiveFont);
@@ -981,6 +1002,7 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_SYLVARI_ANIM_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_SYLVARI_ANIM_LARGE", ReceiveFont);
 
+	optionsCjkFont = nullptr;
 	renderer.clearFonts();
 	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "Font unload queued successfully.");
 }
