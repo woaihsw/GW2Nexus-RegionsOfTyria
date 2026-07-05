@@ -1,6 +1,8 @@
 #include "CurrentMapService.h"
 
-CurrentMapService::CurrentMapService() {}
+CurrentMapService::CurrentMapService() {
+	currentMap = nullptr;
+}
 CurrentMapService::~CurrentMapService() {}
 
 MapData* CurrentMapService::getCurrentMap() {
@@ -14,7 +16,15 @@ MapData* CurrentMapService::getCurrentMap() {
 
 	std::string localestr = GetLocaleAsString(settings.locale);	
 	gw2::map* map = mapInventory->getMapInfo(localestr, currentMapId);
-	if (map == nullptr) return nullptr;
+	if (map == nullptr) {
+		if (mapInventory->isLocaleLoaded(localestr)) {
+			RequestMapLoad(localestr, currentMapId);
+		}
+		else {
+			EnsureLocaleMapsLoaded(localestr);
+		}
+		return nullptr;
+	}
 
 	SectorData currentSector = SectorData();
 	// To detect the current sector we can iterate over the sectors and check if the position is within all boundaries;
@@ -76,7 +86,15 @@ MapData* CurrentMapService::getCurrentMap() {
 gw2::coordinate CurrentMapService::calculatePos() {
 	std::string localestr = GetLocaleAsString(settings.locale);
 	gw2::map* map = mapInventory->getMapInfo(localestr, MumbleLink->Context.MapID);
-	if (map == nullptr) return { 0,0 };
+	if (map == nullptr) {
+		if (mapInventory->isLocaleLoaded(localestr)) {
+			RequestMapLoad(localestr, MumbleLink->Context.MapID);
+		}
+		else {
+			EnsureLocaleMapsLoaded(localestr);
+		}
+		return { 0,0 };
+	}
 
 	// convert from metres (mumble) to inches (map API) by * 39.3700787
 	float x = MumbleLink->AvatarPosition.X * 39.3700787f;

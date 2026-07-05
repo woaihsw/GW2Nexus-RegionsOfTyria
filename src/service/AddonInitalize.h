@@ -17,6 +17,87 @@ static int on_extract_entry(const char* filename, void* arg) {
 	return 0;
 }
 
+static size_t getResourceSize(const int resourceName, const std::string& resourceType) {
+	std::wstring resourceTypeW(resourceType.begin(), resourceType.end());
+	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(resourceName), resourceTypeW.c_str());
+	if (hResource == NULL) {
+		return 0;
+	}
+
+	return SizeofResource(hSelf, hResource);
+}
+
+static unsigned long long getResourceHash(const int resourceName, const std::string& resourceType) {
+	std::wstring resourceTypeW(resourceType.begin(), resourceType.end());
+	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(resourceName), resourceTypeW.c_str());
+	if (hResource == NULL) {
+		return 0;
+	}
+
+	HGLOBAL hLoadedResource = LoadResource(hSelf, hResource);
+	if (hLoadedResource == NULL) {
+		return 0;
+	}
+
+	LPVOID lpResourceData = LockResource(hLoadedResource);
+	if (lpResourceData == NULL) {
+		return 0;
+	}
+
+	size_t resourceSize = SizeofResource(hSelf, hResource);
+	const unsigned char* data = static_cast<const unsigned char*>(lpResourceData);
+	unsigned long long hash = 1469598103934665603ULL;
+	for (size_t i = 0; i < resourceSize; i++) {
+		hash ^= data[i];
+		hash *= 1099511628211ULL;
+	}
+
+	return hash;
+}
+
+static std::string getPackedResourceSignature() {
+	return std::to_string(packedResourcesVersion) + ":" +
+		std::to_string(getResourceSize(IDR_MAPS_ZIP, "ZIP")) + ":" +
+		std::to_string(getResourceHash(IDR_MAPS_ZIP, "ZIP"));
+}
+
+static bool mapResourceFilesExist(const std::string& pathFolder) {
+	for (const auto& lang : SUPPORTED_LOCAL) {
+		if (!fs::exists(pathFolder + "/" + lang + ".json")) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool mapResourcesAreCurrent(const std::string& pathFolder) {
+	if (!mapResourceFilesExist(pathFolder)) {
+		return false;
+	}
+
+	std::string markerPath = pathFolder + "/resources.version";
+	if (!fs::exists(markerPath)) {
+		return false;
+	}
+
+	std::ifstream markerFile(markerPath);
+	if (!markerFile.is_open()) {
+		return false;
+	}
+
+	std::string marker;
+	std::getline(markerFile, marker);
+	return marker == getPackedResourceSignature();
+}
+
+static void storeMapResourceMarker(const std::string& pathFolder) {
+	std::ofstream markerFile(pathFolder + "/resources.version");
+	if (markerFile.is_open()) {
+		markerFile << getPackedResourceSignature();
+	}
+}
+
 static void unpackResource(const int resourceName, const std::string& resourceType, const std::string& targetFileName, bool overwrite = true) {
 
 	std::wstring resourceTypeW(resourceType.begin(), resourceType.end());
@@ -97,8 +178,17 @@ static void UnpackFonts(bool overwrite) {
 }
 
 static void unpackResources() {
-	unpackResource(IDR_MAPS_ZIP, "ZIP", "Maps.zip");
-	unpackResource(IDR_JSON_ALLIANCES_EN, "JSON", "alliances_en.json");
+	std::string pathFolder = getAddonFolder();
+	if (mapResourcesAreCurrent(pathFolder)) {
+		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Packed map resources are current; skipping extraction.");
+	}
+	else {
+		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Packed map resources missing or outdated; extracting.");
+		unpackResource(IDR_MAPS_ZIP, "ZIP", "Maps.zip");
+		if (mapResourceFilesExist(pathFolder)) {
+			storeMapResourceMarker(pathFolder);
+		}
+	}
 	UnpackFonts(false);
 }
 

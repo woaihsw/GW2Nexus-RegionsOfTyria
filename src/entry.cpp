@@ -62,7 +62,6 @@ bool unloading = false;
 bool showDebug = false;
 bool showTemplate[6] = { false, false, false, false, false, false };
 int templateRace = 0;
-bool showServerSelection = false;
 
 // local temps
 std::string characterName = "";
@@ -174,6 +173,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
 ///----------------------------------------------------------------------------------------------------
 void AddonLoad(AddonAPI* aApi)
 {
+	unloading = false;
 	APIDefs = aApi; // store the api somewhere easily accessible
 
 	ImGui::SetCurrentContext((ImGuiContext*)APIDefs->ImguiContext); // cast to ImGuiContext*
@@ -188,7 +188,7 @@ void AddonLoad(AddonAPI* aApi)
 	//APIDefs->AddSimpleShortcut(ADDON_NAME_LONG, AddonShortcut);
 
 	renderer = Renderer();
-	mapLoader = MapLoaderService();
+	mapLoader.reset();
 	mapInventory = new MapInventory();
 	worldInventory = new WorldInventory();
 
@@ -478,6 +478,8 @@ void AddonOptions()
 			if (selected)
 			{
 				settings.locale = item.value;
+				StoreSettings();
+				EnsureLocaleMapsLoaded(item.name);
 			}
 		}
 	}
@@ -707,79 +709,6 @@ void AddonOptions()
 		releaseFonts();
 		loadFontsThreaded();
 	}
-
-	ImGui::Separator();
-	ImGui::Text("WvW specific settings");
-	gw2api::worlds::world* currentWorld = worldInventory->getWorld(GetLocaleAsString(settings.locale), settings.worldId);
-	gw2api::worlds::alliance* currentAlliance = worldInventory->getAlliance(GetLocaleAsString(settings.locale), settings.worldId);
-
-	if (currentWorld == nullptr && currentAlliance == nullptr) {
-		ImGui::Text("No WvW alliance selected as home.");
-	}
-	else if(currentWorld != nullptr) {
-		ImGui::Text(("Current alliance selection: " + currentWorld->name).c_str());
-		ImGui::TextColored({ 255,0,0,1 }, "Please select your alliance below to update to the proper team names!");
-	}
-	else {
-		ImGui::Text(("Current alliance selection: " + currentAlliance->name).c_str());
-	}
-
-	if (ImGui::Button("Alliance Selection")) {
-		showServerSelection = !showServerSelection;
-	}
-
-	if (showServerSelection) {
-		if (ImGui::CollapsingHeader("US Servers")) {
-			const int columns = 6; // Number of columns in the grid
-			if (ImGui::BeginTable("US_Servers_Table", columns)) {
-				int i = 0;
-				for (auto w : worldInventory->getAllAlliances(GetLocaleAsString(settings.locale))) {
-					if ((w->id - 10000) / 1000 == 1) {
-
-						if (i % columns == 0) {
-							ImGui::TableNextRow();
-						}
-						ImGui::TableNextColumn();
-
-						if (ImGui::Button(w->name.c_str())) {
-							settings.worldId = w->id;
-							mapLoader.loadWvWMatchFromAPI();
-							showServerSelection = false;
-							StoreSettings();
-						}
-						
-						i++;
-					}
-				}
-				ImGui::EndTable();
-			}
-		}
-		if (ImGui::CollapsingHeader("EU Servers")) {
-			const int columns = 6; // Number of columns in the grid
-			if (ImGui::BeginTable("EU_Servers_Table", columns)) {
-				int i = 0;
-				for (auto w : worldInventory->getAllAlliances(GetLocaleAsString(settings.locale))) {
-					if ((w->id - 10000) / 1000 == 2) {
-
-						if (i % columns == 0) {
-							ImGui::TableNextRow();
-						}
-						ImGui::TableNextColumn();
-
-						if (ImGui::Button(w->name.c_str())) {
-							settings.worldId = w->id;
-							mapLoader.loadWvWMatchFromAPI();
-							showServerSelection = false;
-							StoreSettings();
-						}
-
-						i++;
-					}
-				}
-				ImGui::EndTable();
-			}
-		}
-	}
 }
 
 void AddonShortcut() {
@@ -846,6 +775,14 @@ void StoreSettings() {
 	else {
 		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "Could not store default settings.json - configuration might get lost between loads.");
 	}
+}
+
+void EnsureLocaleMapsLoaded(const std::string& locale) {
+	mapLoader.ensureLocaleLoaded(locale);
+}
+
+void RequestMapLoad(const std::string& locale, int mapId) {
+	mapLoader.requestMapFromAPI(locale, mapId);
 }
 
 void loadFont(std::string id, float size, std::string filename) {

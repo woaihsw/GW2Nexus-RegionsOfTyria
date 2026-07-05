@@ -2,6 +2,8 @@
 #define MAP_LOADER_SERVICE_H
 
 #include <nlohmann/json.hpp>
+#include <mutex>
+#include <set>
 #include <thread>
 
 #include "../Globals.h"
@@ -14,10 +16,14 @@ public:
 	MapLoaderService();
 	~MapLoaderService();
 
+	void reset();
+
 	/// <summary>
 	/// Startup function to initialize the Map Inventory
 	/// </summary>
 	void initializeMapStorage();
+	void ensureLocaleLoaded(std::string locale);
+	void requestMapFromAPI(std::string locale, int mapId);
 
 	/// <summary>
 	/// Loads WvW Match data from the API.
@@ -27,10 +33,17 @@ public:
 
 	void unload();
 private:
+	std::mutex requestMutex;
+	std::set<std::string> pendingLocales;
+	std::set<std::string> pendingMaps;
+	std::set<std::string> failedMaps;
+
 	std::string performRequest(std::string uri);
 
 	void loadAllMapsFromApi();
 	void loadAllMapsFromStorage();
+	void loadMapsFromStorage(std::string lang);
+	bool loadMapFromAPI(std::string lang, int mapId);
 	void unpackMaps();
 
 	void loadWorldsFromAPI();

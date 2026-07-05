@@ -2,6 +2,8 @@
 #define MAP_INVENTORY_H
 
 #include <map>
+#include <mutex>
+#include <set>
 #include "../entity/GW2API_Continents.h"
 
 namespace gw2 = gw2api::continents;
@@ -13,10 +15,15 @@ public:
 	void addMap(std::string locale, gw2::map* mapInfo);
 	gw2::map* getMapInfo(std::string locale, int id);
 	std::map<int, gw2::map*> getLoadedMaps(std::string locale);
+	bool isLocaleLoaded(std::string locale);
+	void markLocaleLoaded(std::string locale);
 
 	bool isWvWMap(int id);
 
 private:
+	std::mutex inventoryMutex;
+	std::set<std::string> loadedLocales = std::set<std::string>();
+
 	/// <summary>
 	/// Map with the loaded maps per locale
 	/// outer map: locale -> map

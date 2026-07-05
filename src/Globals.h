@@ -46,6 +46,9 @@ extern gw2api::wvw::match* match;
 
 extern bool unloading;
 
+void EnsureLocaleMapsLoaded(const std::string& locale);
+void RequestMapLoad(const std::string& locale, int mapId);
+
 /* Utility */
 inline void replaceAll(std::string& str, const std::string& from, const std::string& to) {
 	size_t startPos = 0;

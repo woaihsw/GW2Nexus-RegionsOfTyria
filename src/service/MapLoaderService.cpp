@@ -1,5 +1,6 @@
 #include "MapLoaderService.h"
 #include <Windows.h>
+#include <limits>
 #include "../resource.h"
 
 #include "../ziplib/src/zip.h"
@@ -11,6 +12,21 @@ int retryCounter = 0;
 // if I put this as a class field I am getting weird "use of deleted function" errors? wtf.
 std::thread initializerThread;
 
+static void addDefaultSector(gw2::map& mapInfo) {
+	if (mapInfo.sectors.size() > 0) {
+		return;
+	}
+
+	gw2api::continents::sector empty = gw2api::continents::sector();
+	empty.id = -1;
+	empty.name = mapInfo.name;
+	empty.level = 80;
+	empty.chatLink = "undefined";
+	empty.bounds.push_back({ std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() });
+	empty.bounds.push_back({ std::numeric_limits<float>::max(), std::numeric_limits<float>::max() });
+	mapInfo.sectors.emplace("-1", empty);
+}
+
 static int on_extract_entry(const char* filename, void* arg) {
 	static int i = 0;
 	int n = *(int*)arg;
@@ -21,6 +37,13 @@ static int on_extract_entry(const char* filename, void* arg) {
 
 MapLoaderService::MapLoaderService() {}
 MapLoaderService::~MapLoaderService() {}
+
+void MapLoaderService::reset() {
+	std::lock_guard<std::mutex> lock(requestMutex);
+	pendingLocales.clear();
+	pendingMaps.clear();
+	failedMaps.clear();
+}
 
 void MapLoaderService::unload() {
 	// Ensure the thread has been started.
@@ -60,29 +83,58 @@ std::string MapLoaderService::performRequest(std::string uri) {
 
 void MapLoaderService::initializeMapStorage() {
 	if (!initializerThread.joinable()) {
-		// Move a newly constructed thread to the class member.
-		initializerThread = std::thread([&] {
-			// Preload some data for WvW maps...
-			// Load data for worlds
-			loadWorldsFromAPI();
-			loadAlliancesFromStorage();
-			// Load data from WvW matches
-			loadWvWMatchFromAPI();
-			// Preload from storage to save time
-			loadAllMapsFromStorage();
-			// Update from API in case the preloaded data was incomplete
-			// This is a longer operation, potentially up to 15 minutes depending on how responsive the API is
-			// or could be done in 10 seconds if the API is like super fast? Woah.
-			try {
-				loadAllMapsFromApi();
-			}
-			catch (...) {
-				APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Unknown exception loading maps from API.");
-			}
+		std::string locale = GetLocaleAsString(settings.locale);
+		{
+			std::lock_guard<std::mutex> lock(requestMutex);
+			pendingLocales.insert(locale);
+		}
+		initializerThread = std::thread([this, locale] {
+			loadMapsFromStorage(locale);
+			std::lock_guard<std::mutex> lock(requestMutex);
+			pendingLocales.erase(locale);
 		});
 		initializerThread.detach();
 	}
 
+}
+
+void MapLoaderService::ensureLocaleLoaded(std::string locale) {
+	if (unloading || locale.empty() || locale == "Unknown") return;
+	if (mapInventory->isLocaleLoaded(locale)) return;
+
+	{
+		std::lock_guard<std::mutex> lock(requestMutex);
+		if (pendingLocales.contains(locale)) return;
+		pendingLocales.insert(locale);
+	}
+
+	std::thread([this, locale] {
+		loadMapsFromStorage(locale);
+		std::lock_guard<std::mutex> lock(requestMutex);
+		pendingLocales.erase(locale);
+	}).detach();
+}
+
+void MapLoaderService::requestMapFromAPI(std::string locale, int mapId) {
+	if (unloading || locale.empty() || locale == "Unknown" || mapId <= 0) return;
+	if (mapInventory->getMapInfo(locale, mapId) != nullptr) return;
+
+	std::string requestKey = locale + ":" + std::to_string(mapId);
+	{
+		std::lock_guard<std::mutex> lock(requestMutex);
+		if (failedMaps.contains(requestKey)) return;
+		if (pendingMaps.contains(requestKey)) return;
+		pendingMaps.insert(requestKey);
+	}
+
+	std::thread([this, locale, mapId, requestKey] {
+		bool loaded = loadMapFromAPI(locale, mapId);
+		std::lock_guard<std::mutex> lock(requestMutex);
+		pendingMaps.erase(requestKey);
+		if (!loaded) {
+			failedMaps.insert(requestKey);
+		}
+	}).detach();
 }
 
 void MapLoaderService::loadAlliancesFromStorage() {
@@ -156,34 +208,7 @@ void MapLoaderService::loadWorldsFromAPI() {
 }
 
 void MapLoaderService::loadWvWMatchFromAPI() {
-	// Mumble has a bug "right now" that displays shard id for world instead of the actual value...
-	// only way to get the right world is /v2/account but that requires providing an API key... 
-	// guess we will have fallbacks for a while.
-	int worldId = 0;
-	 if (settings.worldId != 0) {
-		worldId = settings.worldId;
-	}
-	// if world id hasn't been set until here, we won't complete it today I'm afraid.
-	if(worldId == 0) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Unknown world! Sector display in WvW may be incomplete!");
-		return;
-	}
-
-	std::string matchResponse = performRequest("/v2/wvw/matches?world=" + std::to_string(worldId));
-	if (matchResponse.empty()) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Loading of WvW matchup data failed! Sector display in WvW may be incomplete!");
-		return;
-	}
-	try {
-		json matchJson = json::parse(matchResponse);
-		gw2api::wvw::match m = matchJson;
-		// into globals with you!
-		match = new gw2api::wvw::match(m);
-		APIDefs->Log(ELogLevel_DEBUG, ADDON_NAME, ("Loaded match: " + match->id).c_str());
-	}
-	catch (...) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Error parsing WvW match data.");
-	}
+	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "WvW matchup API loading is disabled for this build.");
 }
 
 void MapLoaderService::unpackMaps() {
@@ -252,6 +277,14 @@ void MapLoaderService::unpackMaps() {
 /// Load all the Maps from addon storage and store them in the mapInventory.
 /// </summary>
 void MapLoaderService::loadAllMapsFromStorage() {
+	for (auto lang : SUPPORTED_LOCAL) {
+		if (unloading) return;
+		loadMapsFromStorage(lang);
+	}
+	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Map loading from storage complete.");
+}
+
+void MapLoaderService::loadMapsFromStorage(std::string lang) {
 	try {
 		// Get addon directory
 		std::string pathFolder = APIDefs->Paths.GetAddonDirectory(ADDON_NAME);
@@ -271,47 +304,137 @@ void MapLoaderService::loadAllMapsFromStorage() {
 			}
 		}
 
-		for (auto lang : SUPPORTED_LOCAL) {
-			if (unloading) return;
-			// Load events from data.json
-			std::string pathData = pathFolder + "/" + lang + ".json";
-			if (fs::exists(pathData)) {
-				std::ifstream dataFile(pathData);
+		if (unloading || mapInventory->isLocaleLoaded(lang)) return;
 
-				if (dataFile.is_open()) {
-					json jsonData;
-					dataFile >> jsonData;
-					dataFile.close();
+		std::string pathData = pathFolder + "/" + lang + ".json";
+		if (fs::exists(pathData)) {
+			std::ifstream dataFile(pathData);
 
-					gw2::region region = jsonData;
-
-					for (auto map : region.maps)
-					{
-						if (unloading) return;
-						gw2::map* m = new gw2::map(map.second);
-						mapInventory->addMap(lang, m);
-					}
-				}
-
+			if (!dataFile.is_open()) {
+				APIDefs->Log(ELogLevel::ELogLevel_WARNING, ADDON_NAME, ("Could not open maps file for language: " + lang + ".json").c_str());
+				mapInventory->markLocaleLoaded(lang);
+				return;
 			}
-			else {
-				APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, ("Maps file for language not found: " + lang + ".json").c_str());
-				continue;
+
+			json jsonData;
+			dataFile >> jsonData;
+			dataFile.close();
+
+			gw2::region region = jsonData;
+
+			for (auto map : region.maps)
+			{
+				if (unloading) return;
+				gw2::map* m = new gw2::map(map.second);
+				mapInventory->addMap(lang, m);
 			}
-			std::stringstream stream;
-			stream << "Maps for locale '" << lang << "' in inventory: " << std::to_string(mapInventory->getLoadedMaps(lang).size());
-			APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, stream.str().c_str());
+			mapInventory->markLocaleLoaded(lang);
 		}
+		else {
+			APIDefs->Log(ELogLevel::ELogLevel_WARNING, ADDON_NAME, ("Maps file for language not found: " + lang + ".json").c_str());
+			mapInventory->markLocaleLoaded(lang);
+			return;
+		}
+
+		if (unloading) return;
+		std::stringstream stream;
+		stream << "Maps for locale '" << lang << "' in inventory: " << std::to_string(mapInventory->getLoadedMaps(lang).size());
+		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, stream.str().c_str());
 	}
 
 	catch (const std::exception& e) {
 		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Exception in map initialization thread.");
 		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, e.what());
+		mapInventory->markLocaleLoaded(lang);
 	}
 	catch (...) {
 		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Unknown exception in map initialization thread.");
+		mapInventory->markLocaleLoaded(lang);
 	}
-	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Map loading from storage complete.");
+}
+
+bool MapLoaderService::loadMapFromAPI(std::string lang, int mapId) {
+	try {
+		if (unloading) return false;
+
+		std::string mapResponse = performRequest("/v2/maps/" + std::to_string(mapId) + "?lang=" + lang);
+		if (unloading) return false;
+		if (mapResponse.empty()) {
+			APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Could not load map " + std::to_string(mapId) + " from GW2 API.").c_str());
+			return false;
+		}
+
+		json mapJson = json::parse(mapResponse);
+		gw2::map mapInfo = {};
+		mapInfo.id = mapJson.value("id", mapId);
+		mapInfo.name = mapJson.value("name", std::string("Unknown"));
+		mapInfo.minLevel = mapJson.value("min_level", 0);
+		mapInfo.maxLevel = mapJson.value("max_level", 0);
+		mapInfo.regionId = mapJson.value("region_id", 0);
+		mapInfo.regionName = mapJson.value("region_name", std::string(""));
+		mapInfo.continentId = mapJson.value("continent_id", 0);
+		mapInfo.continentName = mapJson.value("continent_name", std::string(""));
+		if (mapJson.contains("map_rect")) {
+			mapJson.at("map_rect").get_to(mapInfo.mapRect);
+		}
+		if (mapJson.contains("continent_rect")) {
+			mapJson.at("continent_rect").get_to(mapInfo.continentRect);
+		}
+
+		std::vector<int> floors;
+		if (mapJson.contains("floors")) {
+			mapJson.at("floors").get_to(floors);
+		}
+		else if (mapJson.contains("default_floor")) {
+			floors.push_back(mapJson.at("default_floor").get<int>());
+		}
+
+		for (auto floorId : floors) {
+			if (unloading) return false;
+			std::string floorResponse = performRequest("/v2/continents/" + std::to_string(mapInfo.continentId) + "/floors/" + std::to_string(floorId) + "?lang=" + lang);
+			if (unloading) return false;
+			if (floorResponse.empty()) {
+				continue;
+			}
+
+			json floorJson = json::parse(floorResponse);
+			gw2api::continents::floor floor = floorJson.get<gw2api::continents::floor>();
+			auto region = floor.regions.find(std::to_string(mapInfo.regionId));
+			if (region == floor.regions.end()) {
+				continue;
+			}
+			auto map = region->second.maps.find(std::to_string(mapInfo.id));
+			if (map == region->second.maps.end()) {
+				continue;
+			}
+
+			if (mapInfo.regionName.empty()) {
+				mapInfo.regionName = region->second.name;
+			}
+			if (mapInfo.mapRect.empty()) {
+				mapInfo.mapRect = map->second.mapRect;
+			}
+			if (mapInfo.continentRect.empty()) {
+				mapInfo.continentRect = map->second.continentRect;
+			}
+			for (auto sector : map->second.sectors) {
+				mapInfo.sectors.emplace(sector);
+			}
+		}
+
+		addDefaultSector(mapInfo);
+		mapInventory->addMap(lang, new gw2::map(mapInfo));
+		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Loaded missing map " + std::to_string(mapInfo.id) + " for locale '" + lang + "' from GW2 API.").c_str());
+		return true;
+	}
+	catch (const std::exception& e) {
+		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Exception loading missing map from GW2 API: " + std::string(e.what())).c_str());
+	}
+	catch (...) {
+		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "Unknown exception loading missing map from GW2 API.");
+	}
+
+	return false;
 }
 
 /// <summary>

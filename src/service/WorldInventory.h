@@ -2,6 +2,7 @@
 #define WORLD_INVENTORY_H
 
 #include <map>
+#include <mutex>
 #include "../entity/GW2API_Worlds.h"
 
 class WorldInventory {
@@ -18,6 +19,8 @@ public:
 	std::vector < gw2api::worlds::alliance*> getAllAlliances(std::string locale);
 
 private:
+	std::mutex inventoryMutex;
+
 	/// <summary>
 	/// Map with the loaded maps per locale
 	/// outer map: locale -> map
