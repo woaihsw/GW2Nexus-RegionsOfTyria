@@ -150,13 +150,11 @@ void Renderer::registerFont(std::string name, ImFont* font) {
 		}
 	}
 
-	if (coreFontCount >= expectedFontCount) {
+	bool allCoreFontsLoaded = coreFontCount >= expectedFontCount;
+	if (allCoreFontsLoaded && !fontsLoaded) {
 		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "All fonts loaded and registered with the renderer.");
-		fontsLoaded = true;
 	}
-	else {
-		fontsLoaded = false;
-	}
+	fontsLoaded = allCoreFontsLoaded;
 }
 
 ImFont* Renderer::getLoadedFont(const std::string& name) {
