@@ -9,9 +9,18 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: windows-latest
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Build and run addon_units
+        run: tests/run_units.sh
+
+  build:
+    needs: unit-tests
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,36 +59,58 @@ jobs:
           path: x64/RegionsDisplay.dll
           if-no-files-found: error
 
-      - name: Read addon version
-        if: github.event_name != 'pull_request'
-        id: version
-        shell: pwsh
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: RegionsDisplay
+          path: release-dll
+
+      - name: Flatten DLL path
         run: |
-          $text = Get-Content -Raw "src/entry.cpp"
-          function Read-Field([string]$name) {
-            if ($text -match "Version\.$name\s*=\s*(\d+)") {
-              return $Matches[1]
-            }
-            throw "Could not find Version.$name in src/entry.cpp"
-          }
-          $tag = "$(Read-Field 'Major').$(Read-Field 'Minor').$(Read-Field 'Build').$(Read-Field 'Revision')"
-          if ($env:GITHUB_REF.StartsWith("refs/tags/")) {
-            $tag = $env:GITHUB_REF_NAME.TrimStart("v")
-          }
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Release tag: $tag"
+          set -euo pipefail
+          dll="$(find release-dll -name 'RegionsDisplay.dll' | head -n 1)"
+          test -n "$dll"
+          cp "$dll" RegionsDisplay.dll
+
+      - name: Require tag to match AddonDef.Version
+        id: version
+        run: |
+          set -euo pipefail
+          source_version="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("src/entry.cpp").read_text(encoding="utf-8", errors="replace")
+          fields = {}
+          for name in ("Major", "Minor", "Build", "Revision"):
+              match = re.search(rf"Version\.{name}\s*=\s*(\d+)", text)
+              if not match:
+                  raise SystemExit(f"Could not find Version.{name} in src/entry.cpp")
+              fields[name] = match.group(1)
+          print(".".join(fields[name] for name in ("Major", "Minor", "Build", "Revision")))
+          PY
+          )"
+          tag="${GITHUB_REF_NAME}"
+          if [ "$tag" != "$source_version" ]; then
+            echo "Git tag '$tag' must exactly match AddonDef.Version '$source_version' (no v prefix)."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing release $tag"
 
       - name: Publish GitHub Release
-        if: >
-          github.event_name != 'pull_request' &&
-          (github.ref == 'refs/heads/main' ||
-           github.ref == 'refs/heads/fix/chinese-locale' ||
-           startsWith(github.ref, 'refs/tags/'))
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
-          files: x64/RegionsDisplay.dll
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: RegionsDisplay.dll
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true
