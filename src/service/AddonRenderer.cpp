@@ -5,16 +5,9 @@
 
 using json = nlohmann::json;
 
-/* Proto */
-void fade();
-void cancelCurrentAnimation();
 std::string replacePlaceholderTexts(std::string text, bool useSampleText);
 
-std::thread animationThread;
-std::mutex animMutex;
-
-bool cancelAnimation = false;
-bool animating;
+std::optional<std::chrono::steady_clock::time_point> popupAnimationStart;
 float opacity = 0.0f;
 
 CurrentMapService currentMapService = CurrentMapService();
@@ -100,14 +93,14 @@ void Renderer::changeCurrentCharacter(std::string c) {
 		currentSectorId = -1;
 		currentMapId = -1;
 		fontsPicked = false;
+		popupAnimationStart.reset();
+		opacity = 0.0f;
 	}
 }
 
 void Renderer::unload() {
-	unloading = true;
-	if (animationThread.joinable()) {
-		animationThread.join();
-	}
+	popupAnimationStart.reset();
+	opacity = 0.0f;
 }
 
 bool Renderer::isCleared() {
@@ -319,7 +312,7 @@ void Renderer::postRender(ImGuiIO& io) {
 }
 
 void Renderer::render() {
-	if (unloading) return;
+	if (unloading.load()) return;
 	try {
 		renderSampleInfo();
 		renderSectorInfo();
@@ -506,20 +499,25 @@ void Renderer::renderSectorInfo() {
 		currentSectorId = currentMap->currentSector.id;
 
 		APIDefs->Events.Raise("EV_TYRIAN_REGIONS_SECTOR_CHANGED", currentMap);
-
-		// check if we are currently animating and cancel the animation, yeah?
-		if (animating) {
-			cancelAnimation = true;			
-			while (animating) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			}
-		}
-		cancelAnimation = false;
-		animationThread = std::thread(fade);
-		animationThread.detach();		
+		popupAnimationStart = std::chrono::steady_clock::now();
 	}
-	
-	if (!animating) return;
+
+	if (!popupAnimationStart.has_value()) {
+		return;
+	}
+
+	const float elapsed = std::chrono::duration<float>(
+		std::chrono::steady_clock::now() - *popupAnimationStart).count();
+	const PopupAnimationParams animation = PopupAnimationParams::fromSettings(
+		settings.popupAnimationSpeed,
+		settings.popupAnimationDuration);
+	if (!PopupAnimationActive(elapsed, animation)) {
+		popupAnimationStart.reset();
+		opacity = 0.0f;
+		return;
+	}
+
+	opacity = PopupOpacityAt(elapsed, animation);
 	renderInfo(opacity, false);
 }
 
@@ -645,20 +643,26 @@ void Renderer::renderDebugInfo() {
 				ImGui::TextColored(ImVec4(255, 0, 0, 1), "No map found in inventory!");
 			}
 			else {
-				gw2::map* inventoryMap = mapInventory->getMapInfo("en", currentMap->id);
-				ImGui::Text(("Map Id: " + std::to_string(inventoryMap->id)).c_str());
-				ImGui::Text(("Map Name: " + inventoryMap->name).c_str());
-				ImGui::Text(("Region Id: " + std::to_string(inventoryMap->regionId)).c_str());
-				ImGui::Text(("Region Name: " + inventoryMap->regionName).c_str());
-				ImGui::Text(("Continent Id: " + std::to_string(inventoryMap->continentId)).c_str());
-				ImGui::Text(("Continent Name: " + inventoryMap->continentName).c_str());
-				ImGui::Text(("MinLevel: " + std::to_string(inventoryMap->minLevel)).c_str());
-				ImGui::Text(("MaxLevel: " + std::to_string(inventoryMap->maxLevel)).c_str());
-				if (ImGui::CollapsingHeader("Sectors")) {
-					for (auto sector : inventoryMap->sectors) {
-						if (ImGui::CollapsingHeader((std::to_string(sector.second.id) + ": " + sector.second.name).c_str())) {
-							json j = sector.second;
-							ImGui::Text(j.dump(4).c_str());
+				std::string locale = GetLocaleAsString(settings.locale);
+				gw2::map* inventoryMap = mapInventory->getMapInfo(locale, currentMap->id);
+				if (inventoryMap == nullptr) {
+					ImGui::Text("Map not loaded");
+				}
+				else {
+					ImGui::Text(("Map Id: " + std::to_string(inventoryMap->id)).c_str());
+					ImGui::Text(("Map Name: " + inventoryMap->name).c_str());
+					ImGui::Text(("Region Id: " + std::to_string(inventoryMap->regionId)).c_str());
+					ImGui::Text(("Region Name: " + inventoryMap->regionName).c_str());
+					ImGui::Text(("Continent Id: " + std::to_string(inventoryMap->continentId)).c_str());
+					ImGui::Text(("Continent Name: " + inventoryMap->continentName).c_str());
+					ImGui::Text(("MinLevel: " + std::to_string(inventoryMap->minLevel)).c_str());
+					ImGui::Text(("MaxLevel: " + std::to_string(inventoryMap->maxLevel)).c_str());
+					if (ImGui::CollapsingHeader("Sectors")) {
+						for (auto sector : inventoryMap->sectors) {
+							if (ImGui::CollapsingHeader((std::to_string(sector.second.id) + ": " + sector.second.name).c_str())) {
+								json j = sector.second;
+								ImGui::Text(j.dump(4).c_str());
+							}
 						}
 					}
 				}
@@ -895,90 +899,6 @@ void Renderer::centerTextSmall(std::string text, float textY, float opacityOverr
 	}
 	ImGui::SetCursorPos(ImVec2(textX, textY));
 	renderTextAnimation(text.c_str(), opacityOverride, false, false);
-}
-
-void cancelCurrentAnimation() {
-	opacity = 0.0f;
-	animating = false;
-	cancelAnimation = false;
-	//APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Animation cancelled");
-}
-
-/// <summary>
-/// Original Author: Delta
-/// Additions to fade out after sleep: Pirate
-/// 
-/// Routine to fade in/fade out content hooked on the opacity flag.
-/// Music Tip: NOTHING MORE - FADE IN/FADE OUT:
-/// https://www.youtube.com/watch?v=wBC3Tl0dg4M
-/// </summary>
-void fade() {
-	std::lock_guard<std::mutex> lock(animMutex); // Ensures single-thread access
-
-	if (animating) return; // we are already animating, so stop it now
-#ifndef NDEBUG
-	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Animation started.");
-#endif
-	animating = true;
-	try {
-		// fade in
-		while (true)
-		{
-			if (unloading || cancelAnimation) {
-				cancelCurrentAnimation();
-				return;
-			}
-			opacity += 0.05f;
-			if (opacity > 1) {
-				opacity = 1.0f;
-				break;
-			}
-			int sleepTime = settings.popupAnimationSpeed;
-			if (sleepTime < 0) sleepTime = 0;
-			Sleep(sleepTime);
-		}
-		// Stay 
-		int animationDuration = settings.popupAnimationDuration;
-		if (animationDuration <= 0) animationDuration = 3;
-		for (int i = 0; i < animationDuration * 1000; i++) {
-			if (unloading || cancelAnimation) {
-				cancelCurrentAnimation();
-				return;
-			}
-			Sleep(1); // sleep first so the text stays a little
-		}
-		// fade out
-		while (true)
-		{
-			if (unloading || cancelAnimation) {
-				cancelCurrentAnimation();
-				return;
-			}
-
-			opacity -= 0.05f;
-
-			if (opacity < 0.0f) {
-				opacity = 0.0f;
-				break;
-			}
-
-			int sleepTime = settings.popupAnimationSpeed;
-			if (sleepTime < 0) sleepTime = 0;
-			Sleep(sleepTime);
-		}
-	}
-	catch (const std::exception& e) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Exception in animation thread.");
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, e.what());
-	}
-	catch (...) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Unknown exception thread.");
-	}
-	cancelAnimation = false;
-	animating = false;
-#ifndef NDEBUG
-	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Animation thread complete.");
-#endif
 }
 
 std::string replacePlaceholderTexts(std::string text, bool useSampleText) {

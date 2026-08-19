@@ -1,68 +1,59 @@
-# GW2Nexus-RegionsOfTyria
-Addon for GW2 Nexus to display the current zone information whenever crossing borders - just like your favorite (MMO)RPG does!
+# Regions of Tyria (Chinese locale fork)
 
-This addons started out as learning project and turned into an inofficial port of one of my favorite BlishHUD modules: 
-https://github.com/agaertner/bhm-zone-display
+Nexus addon for Guild Wars 2 that shows continent, region, map, and sector names when you cross a border, plus an optional on-screen widget.
 
-![Sample](src/samples/sample_norn.png) ![Widget](src/samples/sample_norn_widget.png)
+This repository is a fork of [https://github.com/HeavyMetalPirate/GW2Nexus-RegionsOfTyria](https://github.com/HeavyMetalPirate/GW2Nexus-RegionsOfTyria). The original addon and its racial fonts, popup, and widget design are HeavyMetalPirate's work. This fork exists **primarily to add Chinese locale support** (`zh`): Chinese map data, CJK font fallback, and a Chinese option in Nexus settings.
 
-### Features
-- Popup text that displays the zone you just entered
-  - Including animations whenever the popup fades in/out
-- Mini Widget that is active during gameplay
-- Custom fonts that change with the race of your character as well as a generic font
-  - Support for your own fonts
-- Fully customizable display options regarding formats, colors and sizes
-- Language support for en, de, es and fr - change the settings in the Nexus quick settings menu
-- Map updates via GW2 API
+It is an unofficial port of the BlishHUD module [bhm-zone-display](https://github.com/agaertner/bhm-zone-display).
 
-### Customizing your experience
-Regions of Tyria allows for a high level of customization. To get the most out of it by tailoring it to your wants and needs, there's a bunch of options available:
+## Features
 
-![Settings](src/samples/settings.png)
+- Popup text when you enter a new sector, with a fade-in / hold / fade-out
+- Mini widget during gameplay
+- Racial fonts (Asura, Charr, Human, Norn, Sylvari) plus a generic font; custom TTF files are supported
+- Per-font layout, color, size, and format strings
+- Locales: English, German, Spanish, French, and Chinese
+- Packed map names from the Guild Wars 2 API; missing maps can be fetched on demand
 
-1. Option to change the language of output - This will affect names of Maps, Sectors etc.
-2. Toggles for the main popup text - You can either disable the entire text, or just the animation during fades
-3. This block handles how the mini widget is displayed; more options are available in the specific sections block
-4. This dropdown allows you to change the mode of display - you can pick whether you want to use fonts specific to races, a generic font or even a font of a race for everything
-5. This entire block handles display formatting **per font**. Each tab available has its own values. If you really like the setup you created for one race you can copy that setting to others using this button
-6. This allows you to alter how texts are displayed, using placeholders. The explanation for placeholders can be found in the options screen as well
-7. You can alter font sizes on demand. Note that if you change font sizes you need to reload them to take effect
-8. This button reloads all fonts specific to the addon. Other ways to reload fonts include unloading and reloading the addon, and restarting the game. This button is the least extreme option. Note that the UI might flicker for a bit until everything is back in order.
-9. This button resets all fonts to the current font version default. It will unpack all fonts from the addon library. Unlike addon initialization, this will also overwrite existing ones. Note that fonts will get reloaded in the process, doing essentially the same as the button labeled 8 in the process.
+## Install
 
-You think my font selections are bad and you want to change things up for your own likings? You can absolutely do that!
-In your `<GW2InstallDir>/addons/TyrianRegions` folder there's a bunch of TTF files. These are the fonts being used to display about everything in the addon.
-All font files follow a certain pattern:
-- fonts for actual readable text are named font_<scenario>.ttf
-- fonts used for the animation during fade are named fonts_<scenario>_anim.ttf
+Build `RegionsDisplay.dll` (see CI) and place it where Nexus loads addons. Packed fonts and map JSON extract into `<GW2Install>/addons/TyrianRegions` on first launch or when the packed resource version changes.
 
-Say you want to replace both the animation font and readable font for humans. In that case all you need to do is replace the font_human.ttf and fonts_human_anim.ttf and you're done!
-Remember to reload fonts using the button in the options.
+Nexus GitHub updates for this fork use `https://github.com/woaihsw/GW2Nexus-RegionsOfTyria`.
 
-Every now and then I might change the default font for something, raising the internal font version. In that case you will see a popup text giving you the choice of either loading the new versions or keeping things as is.
-Mind that loading the new versions will replace **all** files. If you have custom fonts in place, make sure to back them up first!
+## Settings
 
-### Planned features and ideas
-- Extended zone information widget (which POIs, events etc. are within this zone)
-- Option to color capitalized letters in different colors
+Nexus options for this addon cover:
 
-### Known issues
-- Addon unloading takes some seconds when unload is being called during initialization of the addon or in the middle of an animation
-- World vs. World team names aren't updated yet
-  - This is due to the GW2 API not offering the new names yet
+1. Output language (map and sector names), including Chinese
+2. Popup enable, combat/competitive hide, animation speed and duration
+3. Mini widget position, width, opacity, and alignment
+4. Font mode: follow character race, or force one font everywhere
+5. Per-race display formats, sizes, colors, and borders (`@c` continent, `@r` region, `@m` map, `@s` sector)
+6. Reload or reset packed fonts
 
-### You have any suggestions? Let me know!
-I am active on the Raidcore.gg discord, and Regions of Tyria has its own channel: https://discord.com/channels/410828272679518241/1243221036175069284
+Custom fonts live in `<GW2Install>/addons/TyrianRegions`:
 
-I'd love to hear suggestions, or just see showcases of what you did with this addon!
+- Readable text: `font_<race>.ttf`
+- Fade animation: `fonts_<race>_anim.ttf`
 
-### For Developers
-The availability of this addon can be tested by raising an event `EV_TYRIAN_REGIONS_AVAILABLE`.
-Prompted, the addon will emit an event `EV_TYRIAN_REGIONS_AVAILABLE` with the current `AddonDefinition` as a payload. This allows for sanity checks against versions and such.
+Reloading fonts from options applies replacements. Resetting fonts overwrites those files with the packed defaults.
 
-The addon also emits events `EV_TYRIAN_REGIONS_SECTOR_CHANGED` whenever a sector change has been detected (= the popup text gets rendered).
-The payload for this event contains the following `MapData` struct:
+## Regenerating map data
+
+Packed locale files (`en.json`, `de.json`, `es.json`, `fr.json`, `zh.json`) and `cjk_seed.txt` are built from the live continents API:
+
+```bash
+python3 tools/generate_maps.py
+```
+
+Then bump `packedResourcesVersion` in `src/Constants.h` so existing installs extract the new pack. Do not crawl the API during game login; the addon reads the packed JSON for the selected locale and only requests a missing map when you enter it.
+
+## Developer events
+
+Raise `EV_TYRIAN_REGIONS_CHECK` to receive `EV_TYRIAN_REGIONS_AVAILABLE` with the current `AddonDefinition`.
+
+`EV_TYRIAN_REGIONS_SECTOR_CHANGED` is raised when the popup sector changes. Payload:
 
 ```c++
 struct MapData {
@@ -72,7 +63,6 @@ struct MapData {
 	std::string regionName;
 	int continentId;
 	std::string continentName;
-
 	SectorData currentSector;
 };
 
@@ -81,3 +71,12 @@ struct SectorData {
 	std::string name;
 };
 ```
+
+## Known issues
+
+- A blocked `api.guildwars2.com` request cannot be cancelled mid-call; unload waits until that request returns, then joins workers.
+- WvW alliance display still depends on API names that may lag the live mode.
+
+## License
+
+MIT, as in the original project.

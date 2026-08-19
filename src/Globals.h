@@ -13,6 +13,8 @@
 #define STRICT
 #endif // !STRICT
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <sstream>
 #include <vector>
@@ -40,11 +42,11 @@ extern AddonAPI* APIDefs;
 extern Mumble::Data* MumbleLink;
 extern NexusLinkData* NexusLink;
 
-extern MapInventory* mapInventory;
-extern WorldInventory* worldInventory;
+extern std::unique_ptr<MapInventory> mapInventory;
+extern std::unique_ptr<WorldInventory> worldInventory;
 extern gw2api::wvw::match* match;
 
-extern bool unloading;
+extern std::atomic<bool> unloading;
 
 void EnsureLocaleMapsLoaded(const std::string& locale);
 void RequestMapLoad(const std::string& locale, int mapId);

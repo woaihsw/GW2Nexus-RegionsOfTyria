@@ -17,7 +17,7 @@ namespace HTTPClient {
             return "";
         }
 
-        const unsigned long chunkSize = 128;
+        const unsigned long chunkSize = 65536;
         char buffer[chunkSize];
         unsigned long bytesRead;
         std::stringstream strStream;

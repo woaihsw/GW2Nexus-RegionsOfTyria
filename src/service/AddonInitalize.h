@@ -17,51 +17,11 @@ static int on_extract_entry(const char* filename, void* arg) {
 	return 0;
 }
 
-static size_t getResourceSize(const int resourceName, const std::string& resourceType) {
-	std::wstring resourceTypeW(resourceType.begin(), resourceType.end());
-	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(resourceName), resourceTypeW.c_str());
-	if (hResource == NULL) {
-		return 0;
-	}
-
-	return SizeofResource(hSelf, hResource);
-}
-
-static unsigned long long getResourceHash(const int resourceName, const std::string& resourceType) {
-	std::wstring resourceTypeW(resourceType.begin(), resourceType.end());
-	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(resourceName), resourceTypeW.c_str());
-	if (hResource == NULL) {
-		return 0;
-	}
-
-	HGLOBAL hLoadedResource = LoadResource(hSelf, hResource);
-	if (hLoadedResource == NULL) {
-		return 0;
-	}
-
-	LPVOID lpResourceData = LockResource(hLoadedResource);
-	if (lpResourceData == NULL) {
-		return 0;
-	}
-
-	size_t resourceSize = SizeofResource(hSelf, hResource);
-	const unsigned char* data = static_cast<const unsigned char*>(lpResourceData);
-	unsigned long long hash = 1469598103934665603ULL;
-	for (size_t i = 0; i < resourceSize; i++) {
-		hash ^= data[i];
-		hash *= 1099511628211ULL;
-	}
-
-	return hash;
-}
-
-static std::string getPackedResourceSignature() {
-	return std::to_string(packedResourcesVersion) + ":" +
-		std::to_string(getResourceSize(IDR_MAPS_ZIP, "ZIP")) + ":" +
-		std::to_string(getResourceHash(IDR_MAPS_ZIP, "ZIP"));
-}
-
 static bool mapResourceFilesExist(const std::string& pathFolder) {
+	if (!fs::exists(pathFolder + "/" + CJK_SEED_FILE)) {
+		return false;
+	}
+
 	for (const auto& lang : SUPPORTED_LOCAL) {
 		if (!fs::exists(pathFolder + "/" + lang + ".json")) {
 			return false;
@@ -69,6 +29,10 @@ static bool mapResourceFilesExist(const std::string& pathFolder) {
 	}
 
 	return true;
+}
+
+static std::string packedResourceMarker() {
+	return std::to_string(packedResourcesVersion);
 }
 
 static bool mapResourcesAreCurrent(const std::string& pathFolder) {
@@ -88,17 +52,65 @@ static bool mapResourcesAreCurrent(const std::string& pathFolder) {
 
 	std::string marker;
 	std::getline(markerFile, marker);
-	return marker == getPackedResourceSignature();
+	return marker == packedResourceMarker();
 }
 
 static void storeMapResourceMarker(const std::string& pathFolder) {
 	std::ofstream markerFile(pathFolder + "/resources.version");
 	if (markerFile.is_open()) {
-		markerFile << getPackedResourceSignature();
+		markerFile << packedResourceMarker();
 	}
 }
 
+static void extractPackedMaps(const std::string& pathFolder) {
+	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(IDR_MAPS_ZIP), L"ZIP");
+	if (hResource == NULL) {
+		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Did not find packed maps resource.");
+		return;
+	}
+
+	HGLOBAL hLoadedResource = LoadResource(hSelf, hResource);
+	if (hLoadedResource == NULL) {
+		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Could not load packed maps resource.");
+		return;
+	}
+
+	LPVOID lpResourceData = LockResource(hLoadedResource);
+	if (lpResourceData == NULL) {
+		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Could not lock packed maps resource.");
+		return;
+	}
+
+	if (!fs::exists(pathFolder)) {
+		try {
+			fs::create_directory(pathFolder);
+		}
+		catch (const std::exception&) {
+			APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, ("Could not create addon directory: " + pathFolder).c_str());
+			return;
+		}
+	}
+
+	int arg = 2;
+	int err = zip_stream_extract(
+		static_cast<const char*>(lpResourceData),
+		SizeofResource(hSelf, hResource),
+		pathFolder.c_str(),
+		on_extract_entry,
+		&arg);
+	if (err != 0) {
+		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Failed to extract packed maps from module.");
+		return;
+	}
+	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Packed map data extracted from module.");
+}
+
 static void unpackResource(const int resourceName, const std::string& resourceType, const std::string& targetFileName, bool overwrite = true) {
+	std::string pathFolder = APIDefs->Paths.GetAddonDirectory(ADDON_NAME);
+	std::string outputPath = pathFolder + "/" + targetFileName;
+	if (fs::exists(outputPath) && !overwrite) {
+		return;
+	}
 
 	std::wstring resourceTypeW(resourceType.begin(), resourceType.end());
 	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(resourceName), resourceTypeW.c_str());
@@ -119,27 +131,14 @@ static void unpackResource(const int resourceName, const std::string& resourceTy
 		return;
 	}
 
-	std::string pathFolder = APIDefs->Paths.GetAddonDirectory(ADDON_NAME);
-	// Create folder if not exist
 	if (!fs::exists(pathFolder)) {
 		try {
 			fs::create_directory(pathFolder);
 		}
-		catch (const std::exception& e) {
-			std::string message = "Could not create addon directory: ";
-			message.append(pathFolder);
-			APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, message.c_str());
-
-			// Suppress the warning for the unused variable 'e'
-			#pragma warning(suppress: 4101)
-			e;
+		catch (const std::exception&) {
+			APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, ("Could not create addon directory: " + pathFolder).c_str());
+			return;
 		}
-	}
-	std::string outputPath = pathFolder + "/" + targetFileName;
-
-	if (fs::exists(outputPath) && !overwrite) {
-		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, ("Resource already exists, and should not be overwritten: " + targetFileName).c_str());
-		return;
 	}
 
 	FILE* file = nullptr;
@@ -149,17 +148,9 @@ static void unpackResource(const int resourceName, const std::string& resourceTy
 		return;
 	}
 
-	size_t resourceSize = SizeofResource(hSelf, hResource);
-	fwrite(lpResourceData, 1, resourceSize, file);
-
+	fwrite(lpResourceData, 1, SizeofResource(hSelf, hResource), file);
 	fclose(file);
 	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, (targetFileName + " extracted from module.").c_str());
-
-	if ("ZIP" == resourceType) {
-		int arg = 2;
-		zip_extract(outputPath.c_str(), pathFolder.c_str(), on_extract_entry, &arg);
-		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, ("Extracted data from " + targetFileName).c_str());
-	}
 }
 
 static void UnpackFonts(bool overwrite) {
@@ -184,13 +175,12 @@ static void unpackResources() {
 	}
 	else {
 		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Packed map resources missing or outdated; extracting.");
-		unpackResource(IDR_MAPS_ZIP, "ZIP", "Maps.zip");
+		extractPackedMaps(pathFolder);
 		if (mapResourceFilesExist(pathFolder)) {
 			storeMapResourceMarker(pathFolder);
 		}
 	}
 	UnpackFonts(false);
 }
-
 
 #endif

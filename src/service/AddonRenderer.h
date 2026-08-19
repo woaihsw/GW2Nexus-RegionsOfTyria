@@ -3,8 +3,9 @@
 
 #include "../Globals.h"
 #include "CurrentMapService.h"
-#include <thread>
-#include <mutex>
+#include "../PopupAnimation.h"
+#include <chrono>
+#include <optional>
 
 class Renderer {
 public:

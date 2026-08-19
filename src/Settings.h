@@ -2,6 +2,8 @@
 #define SETTINGS_H
 
 #include <nlohmann/json.hpp>
+#include <string>
+#include <vector>
 using json = nlohmann::json;
 
 enum class Locale {
@@ -452,6 +454,77 @@ inline void from_json(const json& j, Settings& settings) {
     }
     else {
         settings.widgetTextAlign = 0;
+    }
+}
+
+inline RacialFontSettings MakeDefaultRacialFont(const char* race) {
+    RacialFontSettings s{};
+    s.race = race;
+    s.smallFontSize = 28.0f;
+    s.displayFormatSmall = "@c / @r / @m";
+    s.largeFontSize = 72.0f;
+    s.displayFormatLarge = "@s";
+    s.verticalPosition = 300.0f;
+    s.spacing = 25.0f;
+    s.fontScale = 1.0f;
+    s.fontColor[0] = s.fontColor[1] = s.fontColor[2] = 255.0f;
+    s.widgetDisplayFormat = "@s";
+    s.widgetFontSize = 20.0f;
+    s.widgetFontColor[0] = s.widgetFontColor[1] = s.widgetFontColor[2] = 255.0f;
+    s.fontBorderMode = 1;
+    s.fontBorderOffset = 2;
+    s.fontBorderColor[0] = s.fontBorderColor[1] = s.fontBorderColor[2] = 0.0f;
+    return s;
+}
+
+inline Settings MakeDefaultSettings() {
+    Settings settings{};
+    settings.fontsVersion = 0;
+    settings.locale = Locale::En;
+    const char* races[6] = { "Generic", "Asura", "Charr", "Human", "Norn", "Sylvari" };
+    for (int i = 0; i < 6; i++) {
+        settings.fontSettings[i] = MakeDefaultRacialFont(races[i]);
+    }
+    settings.worldId = -1;
+    settings.fontMode = 1;
+    settings.widgetFontMode = 1;
+    settings.disableAnimations = false;
+    settings.enablePopup = true;
+    settings.hidePopupInCompetitive = false;
+    settings.hidePopupInCombat = false;
+    settings.popupAnimationSpeed = 35;
+    settings.popupAnimationDuration = 3;
+    settings.widgetEnabled = false;
+    settings.widgetPositionX = 100.0f;
+    settings.widgetPositionY = 100.0f;
+    settings.widgetWidth = 200.0f;
+    settings.widgetBackgroundOpacity = 0.8f;
+    settings.widgetTextAlign = 0;
+    settings.displayFormatSmall = "@c / @r / @m";
+    settings.displayFormatLarge = "@s";
+    settings.verticalPosition = 300.0f;
+    settings.spacing = 25.0f;
+    settings.fontScale = 1.5f;
+    settings.fontColor[0] = settings.fontColor[1] = settings.fontColor[2] = 255.0f;
+    return settings;
+}
+
+enum class SettingsLoadStatus {
+    Ok,
+    Recovered
+};
+
+inline Settings ParseSettingsJson(const std::string& text, SettingsLoadStatus& status) {
+    try {
+        json parsed = json::parse(text);
+        Settings settings = MakeDefaultSettings();
+        from_json(parsed, settings);
+        status = SettingsLoadStatus::Ok;
+        return settings;
+    }
+    catch (...) {
+        status = SettingsLoadStatus::Recovered;
+        return MakeDefaultSettings();
     }
 }
 /// ================================================================================

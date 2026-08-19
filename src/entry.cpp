@@ -15,8 +15,12 @@
 
 #include "Globals.h"
 
-#include <cstring> // For strcpy_s
-#include <unordered_set>
+#include <cstring>
+#include <memory>
+#include <sstream>
+#include <stop_token>
+#include <system_error>
+#include <thread>
 
 /* proto */
 
@@ -34,6 +38,7 @@ void ReceiveFont(const char* aIdentifier, void* aFont);
 void loadFonts();
 void loadFontsThreaded();
 void releaseFonts();
+void ensureUiReady();
 bool loadCjkFonts(const std::string& addonFolder);
 void registerCjkGlyphSeed(const std::string& addonFolder);
 // Keybinds
@@ -52,11 +57,13 @@ AddonDefinition AddonDef	   = {};
 AddonAPI* APIDefs			   = nullptr;
 NexusLinkData* NexusLink	   = nullptr;
 Mumble::Data* MumbleLink	   = nullptr;
-MapInventory* mapInventory     = nullptr; 
-WorldInventory* worldInventory = nullptr;
+std::unique_ptr<MapInventory> mapInventory;
+std::unique_ptr<WorldInventory> worldInventory;
 gw2api::wvw::match* match      = nullptr;
 
-bool unloading = false;
+std::atomic<bool> unloading{ false };
+bool fontsRequested = false;
+std::jthread fontsReloadThread;
 
 /* settings */
 bool showDebug = false;
@@ -66,49 +73,7 @@ int templateRace = 0;
 // local temps
 std::string characterName = "";
 
-Settings settings = {
-	0, // FontsVersion
-	Locale::En, // localse
-	// Racial Font settings [6] 
-	{
-		{
-			"Generic", 28.0f, "@c / @r / @m", 72.0f, "@s", 300.0f, 25.0f, 1.0f,	{255,255,255}, "@s", 20.0f, {255,255,255}, 1, 2, {0,0,0}
-		}, {
-			"Asura", 28.0f,	"@c / @r / @m",	72.0f, "@s", 300.0f, 25.0f,	1.0f, {255,255,255}, "@s", 20.0f, {255,255,255}, 1, 2, {0,0,0}
-		}, {
-			"Charr", 28.0f,	"@c / @r / @m",	72.0f, "@s", 300.0f, 25.0f,	1.0f, {255,255,255}, "@s", 20.0f, {255,255,255}, 1, 2, {0,0,0}
-		}, {
-			"Human", 28.0f,	"@c / @r / @m",	72.0f, "@s", 300.0f, 25.0f, 1.0f, {255,255,255}, "@s", 20.0f, {255,255,255}, 1, 2, {0,0,0}
-		}, {
-			"Norn", 28.0f, "@c / @r / @m", 72.0f, "@s",	300.0f,	25.0f, 1.0f, {255,255,255}, "@s", 20.0f, {255,255,255}, 1, 2, {0,0,0}
-		}, {
-			"Sylvari", 28.0f, "@c / @r / @m", 72.0f, "@s", 300.0f, 25.0f, 1.0f,	{255,255,255}, "@s", 20.0f, {255,255,255}, 1, 2, {0,0,0}
-		}
-	}, // Racial Font settings end
-	-1,		// wvw world
-	1,		// fontMode
-	1,
-	false,	// disableAnimations
-	true,	// enablePopup
-	false,	// hidePopupInCompetitive;
-	false,	// hidePopupInCombat;
-	35,		// popupAnimationSpeed
-	3,		// popupAnimationDuration
-	false,	// widgetEnabled
-	100.0f, // widgetPosX
-	100.0f, // widgetPosY
-	200.0f, // widgetWidt
-	0.8f,	// widgetBackgroundOpacity
-	0,		// widgetTextAlign
-
-	// deprecated Legacy settings
-	"@c / @r / @m",
-	"@s",
-	300.0f,
-	25.0f,
-	1.5f,
-	{255,255,255}
-};
+Settings settings = MakeDefaultSettings();
 
 // local temps
 char displayFormatSmallBuffer[100] = "";
@@ -152,16 +117,15 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
 	AddonDef.Version.Major = 1;
 	AddonDef.Version.Minor = 5;
 	AddonDef.Version.Build = 1;
-	AddonDef.Version.Revision = 3;
+	AddonDef.Version.Revision = 4;
 	AddonDef.Author = "HeavyMetalPirate.2695";
-	AddonDef.Description = "Displays the current sector whenever you cross borders, much like your favorite (MMO)RPG does.";
+	AddonDef.Description = "Chinese-locale fork of Regions of Tyria: displays the current sector whenever you cross borders.";
 	AddonDef.Load = AddonLoad;
 	AddonDef.Unload = AddonUnload;
 	AddonDef.Flags = EAddonFlags_None;
 
-	/* not necessary if hosted on Raidcore, but shown anyway for the example also useful as a backup resource */
 	AddonDef.Provider = EUpdateProvider_GitHub;
-	AddonDef.UpdateLink = "https://github.com/HeavyMetalPirate/GW2Nexus-RegionsOfTyria";
+	AddonDef.UpdateLink = "https://github.com/woaihsw/GW2Nexus-RegionsOfTyria";
 
 	return &AddonDef;
 }
@@ -189,29 +153,22 @@ void AddonLoad(AddonAPI* aApi)
 
 	renderer = Renderer();
 	mapLoader.reset();
-	mapInventory = new MapInventory();
-	worldInventory = new WorldInventory();
+	mapInventory = std::make_unique<MapInventory>();
+	worldInventory = std::make_unique<WorldInventory>();
+	fontsRequested = false;
 
-	// Register Events
 	APIDefs->Events.Subscribe("EV_MUMBLE_IDENTITY_UPDATED", HandleIdentityChanged);
 	APIDefs->Events.Subscribe("EV_TYRIAN_REGIONS_CHECK", HandleAddonMetaData);
 
-	// Unpack the addon resources to the addon data
 	unpackResources();
 	LoadSettings();
 
-	// if fonts version is not yet set, do the magic
 	if (settings.fontsVersion == 0) {
 		UnpackFonts(true);
 		settings.fontsVersion = fontsVersion;
 		StoreSettings();
 	}
 
-	// Initialize the custom fonts
-	registerCjkGlyphSeed(getAddonFolder());
-	loadFonts();
-
-	// Start filling the inventory in the background
 	mapLoader.initializeMapStorage();
 
 	// Add an options window and a regular render callback - always do this at the end I guess
@@ -374,27 +331,30 @@ void ReceiveFont(const char* aIdentifier, void* aFont) {
 ///----------------------------------------------------------------------------------------------------
 void AddonUnload()
 {
-
 	StoreSettings();
+	unloading.store(true);
 
-	// Disable everything that listens to this global
-	unloading = true;
+	if (fontsReloadThread.joinable()) {
+		fontsReloadThread.request_stop();
+		fontsReloadThread.join();
+	}
 	mapLoader.unload();
 	renderer.unload();
 
-	//APIDefs->RemoveShortcut("QA_MYFIRSTADDON");
 	APIDefs->InputBinds.Deregister(KB_MFA);
-	//APIDefs->RemoveSimpleShortcut(ADDON_NAME_LONG);
-
 	APIDefs->Events.Unsubscribe("EV_MUMBLE_IDENTITY_UPDATED", HandleIdentityChanged);
 	APIDefs->Events.Unsubscribe("EV_TYRIAN_REGIONS_CHECK", HandleAddonMetaData);
-
 	APIDefs->Renderer.Deregister(PreRender);
 	APIDefs->Renderer.Deregister(PostRender);
 	APIDefs->Renderer.Deregister(AddonRender);
 	APIDefs->Renderer.Deregister(AddonOptions);
 
-	releaseFonts();
+	if (fontsRequested) {
+		releaseFonts();
+		fontsRequested = false;
+	}
+	mapInventory.reset();
+	worldInventory.reset();
 
 	APIDefs->Log(ELogLevel_DEBUG, ADDON_NAME, "<c=#ff0000>Signing off</c>, it was an honor commander.");
 }
@@ -417,6 +377,9 @@ void PostRender() {
 ///----------------------------------------------------------------------------------------------------
 void AddonRender()
 {
+	if (NexusLink != nullptr && NexusLink->IsGameplay) {
+		ensureUiReady();
+	}
 	renderer.render();
 
 	// Fonts upgrade dialogue
@@ -463,6 +426,7 @@ int InputTextFilterNumbers(ImGuiInputTextCallbackData* data)
 
 void AddonOptions()
 {
+	ensureUiReady();
 	ImGui::Separator();
 	ImGui::Text("Locale");
 	ImGui::Text("");
@@ -645,7 +609,7 @@ void AddonOptions()
 				}
 				if (ImGui::InputFloat("Large Font Size", &fs.largeFontSize)) {
 					APIDefs->Fonts.Resize(fontLargeId.c_str(), fs.largeFontSize);
-					APIDefs->Fonts.Resize(fontAnimLargeId.c_str(), fs.smallFontSize);
+					APIDefs->Fonts.Resize(fontAnimLargeId.c_str(), fs.largeFontSize);
 
 				}
 				ImGui::ColorEdit3("Font Color", fs.fontColor);
@@ -744,21 +708,30 @@ void HandleIdentityChanged(void* anEventArgs) {
 }
 
 void LoadSettings() {
-	// Get addon directory
 	std::string pathData = getAddonFolder() + "/settings.json";
-	if (fs::exists(pathData)) {
-		std::ifstream dataFile(pathData);
-
-		if (dataFile.is_open()) {
-			json jsonData;
-			dataFile >> jsonData;
-			dataFile.close();
-			// parse settings, yay
-			settings = jsonData;
-		}
+	if (!fs::exists(pathData)) {
+		settings = MakeDefaultSettings();
+		StoreSettings();
+		return;
 	}
-	else {
-		// Create new settings!
+
+	std::ifstream dataFile(pathData);
+	if (!dataFile.is_open()) {
+		settings = MakeDefaultSettings();
+		return;
+	}
+
+	std::stringstream buffer;
+	buffer << dataFile.rdbuf();
+	dataFile.close();
+
+	SettingsLoadStatus status = SettingsLoadStatus::Ok;
+	settings = ParseSettingsJson(buffer.str(), status);
+	if (status == SettingsLoadStatus::Recovered) {
+		std::string backupPath = pathData + ".bad";
+		std::error_code error;
+		fs::rename(pathData, backupPath, error);
+		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "settings.json was invalid; restored defaults.");
 		StoreSettings();
 	}
 }
@@ -789,14 +762,37 @@ void loadFont(std::string id, float size, std::string filename) {
 	APIDefs->Fonts.AddFromFile(id.c_str(), size > 0 ? size : 10, filename.c_str(), ReceiveFont, nullptr);
 }
 
+std::string wideToUtf8(const std::wstring& value) {
+	if (value.empty()) {
+		return {};
+	}
+	int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+	if (size <= 1) {
+		return {};
+	}
+	std::string utf8(static_cast<size_t>(size - 1), '\0');
+	WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, utf8.data(), size, nullptr, nullptr);
+	return utf8;
+}
+
+std::string windowsFontsDirectory() {
+	wchar_t windowsDir[MAX_PATH];
+	UINT length = GetWindowsDirectoryW(windowsDir, MAX_PATH);
+	if (length == 0 || length >= MAX_PATH) {
+		return "C:/Windows/Fonts";
+	}
+	return wideToUtf8(std::wstring(windowsDir) + L"\\Fonts");
+}
+
 std::vector<std::string> getSystemCjkFontCandidates() {
+	const std::string fontsDir = windowsFontsDirectory();
 	return {
-		"C:/Windows/Fonts/msyh.ttc",
-		"C:/Windows/Fonts/simsun.ttc",
-		"C:/Windows/Fonts/simhei.ttf",
-		"C:/Windows/Fonts/Deng.ttf",
-		"C:/Windows/Fonts/msjh.ttc",
-		"C:/Windows/Fonts/mingliu.ttc"
+		fontsDir + "/msyh.ttc",
+		fontsDir + "/simsun.ttc",
+		fontsDir + "/simhei.ttf",
+		fontsDir + "/Deng.ttf",
+		fontsDir + "/msjh.ttc",
+		fontsDir + "/mingliu.ttc"
 	};
 }
 
@@ -820,32 +816,14 @@ std::string getSystemCjkAnimationFontPath(const std::string& primaryFontPath) {
 	return primaryFontPath;
 }
 
-int getUtf8CharLength(const char* text) {
-	unsigned char c = static_cast<unsigned char>(*text);
-	if (c < 0x80) return 1;
-	if ((c & 0xE0) == 0xC0) return 2;
-	if ((c & 0xF0) == 0xE0) return 3;
-	if ((c & 0xF8) == 0xF0) return 4;
-	return 1;
-}
-
-void appendUniqueUtf8Characters(std::string& target, std::unordered_set<std::string>& seen, const std::string& text) {
-	for (size_t i = 0; i < text.size();) {
-		unsigned char c = static_cast<unsigned char>(text[i]);
-		int charLength = getUtf8CharLength(text.c_str() + i);
-		if (i + charLength > text.size()) {
-			break;
-		}
-
-		if (c >= 0x80) {
-			std::string character = text.substr(i, charLength);
-			if (seen.insert(character).second) {
-				target.append(character);
-			}
-		}
-
-		i += charLength;
+std::string loadCjkSeedText(const std::string& addonFolder) {
+	std::ifstream seedFile(addonFolder + "/" + CJK_SEED_FILE, std::ios::binary);
+	if (!seedFile.is_open()) {
+		return "Español Français 中文";
 	}
+	std::stringstream buffer;
+	buffer << seedFile.rdbuf();
+	return buffer.str();
 }
 
 void registerCjkGlyphSeed(const std::string& addonFolder) {
@@ -853,27 +831,16 @@ void registerCjkGlyphSeed(const std::string& addonFolder) {
 		return;
 	}
 
-	std::string seed = "Español Français 中文 泰瑞亚 科瑞塔 狮子拱门 迷雾之地";
-	std::unordered_set<std::string> seen;
-	std::string uniqueSeed;
-	appendUniqueUtf8Characters(uniqueSeed, seen, seed);
-
-	std::ifstream zhData(addonFolder + "/zh.json", std::ios::binary);
-	if (zhData.is_open()) {
-		std::stringstream buffer;
-		buffer << zhData.rdbuf();
-		appendUniqueUtf8Characters(uniqueSeed, seen, buffer.str());
-	}
-
+	std::string seed = loadCjkSeedText(addonFolder);
 	std::vector<std::string> languageIdentifiers = {
 		"en", "de", "es", "fr", "zh",
 		"en-GB", "en-US", "de-DE", "es-ES", "fr-FR", "zh-CN"
 	};
 	for (const auto& languageIdentifier : languageIdentifiers) {
-		APIDefs->Localization.Set("ROT_CJK_GLYPH_SEED", languageIdentifier.c_str(), uniqueSeed.c_str());
+		APIDefs->Localization.Set("ROT_CJK_GLYPH_SEED", languageIdentifier.c_str(), seed.c_str());
 	}
 	cjkGlyphSeedRegistered = true;
-	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Registered CJK glyph seed with " + std::to_string(seen.size()) + " unique non-ASCII characters.").c_str());
+	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Registered CJK glyph seed (" + std::to_string(seed.size()) + " bytes).").c_str());
 }
 
 const ImWchar* getCjkGlyphRanges(const std::string& addonFolder) {
@@ -884,12 +851,9 @@ const ImWchar* getCjkGlyphRanges(const std::string& addonFolder) {
 	ImFontGlyphRangesBuilder builder;
 	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesDefault());
 	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
-
-	std::ifstream zhData(addonFolder + "/zh.json", std::ios::binary);
-	if (zhData.is_open()) {
-		std::stringstream buffer;
-		buffer << zhData.rdbuf();
-		builder.AddText(buffer.str().c_str());
+	std::string seed = loadCjkSeedText(addonFolder);
+	if (!seed.empty()) {
+		builder.AddText(seed.c_str());
 	}
 
 	builder.BuildRanges(&cjkGlyphRanges);
@@ -966,24 +930,32 @@ void loadFonts() {
 }	
 
 
-void loadFontsThreaded() {
-	// in case we reload fonts during runtime we need to wait for the unload to be executed first
-	// that happens before/after render execution. therefore run it threaded with sleeps and waiting
-	// for fonts to unload first
-	std::thread fontsThread([] {
+void ensureUiReady() {
+	if (unloading.load() || fontsRequested || APIDefs == nullptr) {
+		return;
+	}
+	fontsRequested = true;
+	registerCjkGlyphSeed(getAddonFolder());
+	loadFonts();
+}
 
-		// wait for unload
-		while (!renderer.isCleared()) {
+void loadFontsThreaded() {
+	if (fontsReloadThread.joinable()) {
+		fontsReloadThread.request_stop();
+		fontsReloadThread.join();
+	}
+	fontsReloadThread = std::jthread([](std::stop_token stopToken) {
+		while (!stopToken.stop_requested() && !unloading.load() && !renderer.isCleared()) {
 			Sleep(1);
 		}
-
-		// grace period for Nexus to get its shit together
+		if (stopToken.stop_requested() || unloading.load()) {
+			return;
+		}
 		Sleep(50);
-		loadFonts();
-
-		});
-
-	fontsThread.detach();
+		if (!stopToken.stop_requested() && !unloading.load()) {
+			loadFonts();
+		}
+	});
 }
 
 void releaseFonts() {
@@ -1027,6 +999,8 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_SYLVARI_ANIM_LARGE", ReceiveFont);
 
 	optionsCjkFont = nullptr;
+	cjkGlyphSeedRegistered = false;
+	cjkGlyphRanges.clear();
 	renderer.clearFonts();
 	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "Font unload queued successfully.");
 }
