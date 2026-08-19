@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -40,9 +43,43 @@ jobs:
           /p:VcpkgUseStatic=true
           /p:VcpkgTriplet=x64-windows-static
 
-      - name: Upload DLL
+      - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
           name: RegionsDisplay
           path: x64/RegionsDisplay.dll
           if-no-files-found: error
+
+      - name: Read addon version
+        if: github.event_name != 'pull_request'
+        id: version
+        shell: pwsh
+        run: |
+          $text = Get-Content -Raw "src/entry.cpp"
+          function Read-Field([string]$name) {
+            if ($text -match "Version\.$name\s*=\s*(\d+)") {
+              return $Matches[1]
+            }
+            throw "Could not find Version.$name in src/entry.cpp"
+          }
+          $tag = "$(Read-Field 'Major').$(Read-Field 'Minor').$(Read-Field 'Build').$(Read-Field 'Revision')"
+          if ($env:GITHUB_REF.StartsWith("refs/tags/")) {
+            $tag = $env:GITHUB_REF_NAME.TrimStart("v")
+          }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Release tag: $tag"
+
+      - name: Publish GitHub Release
+        if: >
+          github.event_name != 'pull_request' &&
+          (github.ref == 'refs/heads/main' ||
+           github.ref == 'refs/heads/fix/chinese-locale' ||
+           startsWith(github.ref, 'refs/tags/'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: x64/RegionsDisplay.dll
+          generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true

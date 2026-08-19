@@ -17,9 +17,7 @@ It is an unofficial port of the BlishHUD module [bhm-zone-display](https://githu
 
 ## Install
 
-Build `RegionsDisplay.dll` (see CI) and place it where Nexus loads addons. Packed fonts and map JSON extract into `<GW2Install>/addons/TyrianRegions` on first launch or when the packed resource version changes.
-
-Nexus GitHub updates for this fork use `https://github.com/woaihsw/GW2Nexus-RegionsOfTyria`.
+Install from the [Releases](https://github.com/woaihsw/GW2Nexus-RegionsOfTyria/releases) page (`RegionsDisplay.dll`) or let Nexus update from `https://github.com/woaihsw/GW2Nexus-RegionsOfTyria`. CI builds the DLL and publishes it to that GitHub Release so Nexus can pick it up. Packed fonts and map JSON extract into `<GW2Install>/addons/TyrianRegions` on first launch or when the packed resource version changes.
 
 ## Settings
 
