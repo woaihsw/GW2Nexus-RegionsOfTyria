@@ -14,13 +14,16 @@
 #include "service/AddonInitalize.h"
 
 #include "Globals.h"
+#include "FontReload.h"
+#include "SettingsBackup.h"
+#include "WideUtf8.h"
 
+#include <chrono>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <sstream>
-#include <stop_token>
 #include <system_error>
-#include <thread>
 
 /* proto */
 
@@ -36,7 +39,8 @@ void PostRender();
 // Fonts
 void ReceiveFont(const char* aIdentifier, void* aFont);
 void loadFonts();
-void loadFontsThreaded();
+void requestFontReload();
+void pumpFontReload();
 void releaseFonts();
 void ensureUiReady();
 bool loadCjkFonts(const std::string& addonFolder);
@@ -63,7 +67,8 @@ gw2api::wvw::match* match      = nullptr;
 
 std::atomic<bool> unloading{ false };
 bool fontsRequested = false;
-std::jthread fontsReloadThread;
+FontReloadSchedule fontReload;
+std::optional<std::chrono::steady_clock::time_point> fontReloadRequestedAt;
 
 /* settings */
 bool showDebug = false;
@@ -333,11 +338,8 @@ void AddonUnload()
 {
 	StoreSettings();
 	unloading.store(true);
-
-	if (fontsReloadThread.joinable()) {
-		fontsReloadThread.request_stop();
-		fontsReloadThread.join();
-	}
+	fontReload.cancel();
+	fontReloadRequestedAt.reset();
 	mapLoader.unload();
 	renderer.unload();
 
@@ -363,6 +365,7 @@ void AddonUnload()
 /// PreRender Functionality
 /// </summary>
 void PreRender() {
+	pumpFontReload();
 	renderer.preRender(ImGui::GetIO());
 }
 
@@ -377,6 +380,7 @@ void PostRender() {
 ///----------------------------------------------------------------------------------------------------
 void AddonRender()
 {
+	pumpFontReload();
 	if (NexusLink != nullptr && NexusLink->IsGameplay) {
 		ensureUiReady();
 	}
@@ -393,8 +397,7 @@ void AddonRender()
 
 			if (ImGui::Button("Yes, I want to upgrade")) {
 				UnpackFonts(true);
-				releaseFonts();
-				loadFontsThreaded();
+				requestFontReload();
 
 				settings.fontsVersion = fontsVersion;
 			}
@@ -426,6 +429,7 @@ int InputTextFilterNumbers(ImGuiInputTextCallbackData* data)
 
 void AddonOptions()
 {
+	pumpFontReload();
 	ensureUiReady();
 	ImGui::Separator();
 	ImGui::Text("Locale");
@@ -656,8 +660,7 @@ void AddonOptions()
 		}
 
 		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "Font reload requested.");
-		releaseFonts(); // release fonts sync
-		loadFontsThreaded(); // load fonts async, waiting for unload to be executed
+		requestFontReload();
 
 		// reenable selected template display
 		if (selectedShowTemplate != -1) {
@@ -670,8 +673,7 @@ void AddonOptions()
 	if (ImGui::Button("Reset fonts to default")) {
 		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "Font reset requested.");
 		UnpackFonts(true);
-		releaseFonts();
-		loadFontsThreaded();
+		requestFontReload();
 	}
 }
 
@@ -728,9 +730,17 @@ void LoadSettings() {
 	SettingsLoadStatus status = SettingsLoadStatus::Ok;
 	settings = ParseSettingsJson(buffer.str(), status);
 	if (status == SettingsLoadStatus::Recovered) {
-		std::string backupPath = pathData + ".bad";
+		const std::string backupPath = nextSettingsBackupPath(pathData, [](const std::string& path) {
+			return fs::exists(path);
+		});
 		std::error_code error;
+		if (fs::exists(backupPath)) {
+			fs::remove(backupPath, error);
+		}
 		fs::rename(pathData, backupPath, error);
+		if (error) {
+			APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Could not back up invalid settings.json: " + error.message()).c_str());
+		}
 		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "settings.json was invalid; restored defaults.");
 		StoreSettings();
 	}
@@ -767,11 +777,16 @@ std::string wideToUtf8(const std::wstring& value) {
 		return {};
 	}
 	int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-	if (size <= 1) {
+	const int capacity = utf8DestCapacityForWideCharSize(size);
+	if (capacity <= 1) {
 		return {};
 	}
-	std::string utf8(static_cast<size_t>(size - 1), '\0');
-	WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, utf8.data(), size, nullptr, nullptr);
+	std::string utf8(static_cast<size_t>(capacity), '\0');
+	int written = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, utf8.data(), capacity, nullptr, nullptr);
+	if (written <= 0) {
+		return {};
+	}
+	utf8.resize(static_cast<size_t>(utf8PayloadLengthFromWideCharWritten(written)));
 	return utf8;
 }
 
@@ -934,28 +949,43 @@ void ensureUiReady() {
 	if (unloading.load() || fontsRequested || APIDefs == nullptr) {
 		return;
 	}
+	if (fontReload.state == FontReloadState::WaitingForRelease) {
+		return;
+	}
 	fontsRequested = true;
 	registerCjkGlyphSeed(getAddonFolder());
 	loadFonts();
 }
 
-void loadFontsThreaded() {
-	if (fontsReloadThread.joinable()) {
-		fontsReloadThread.request_stop();
-		fontsReloadThread.join();
+void requestFontReload() {
+	if (unloading.load()) {
+		return;
 	}
-	fontsReloadThread = std::jthread([](std::stop_token stopToken) {
-		while (!stopToken.stop_requested() && !unloading.load() && !renderer.isCleared()) {
-			Sleep(1);
-		}
-		if (stopToken.stop_requested() || unloading.load()) {
-			return;
-		}
-		Sleep(50);
-		if (!stopToken.stop_requested() && !unloading.load()) {
-			loadFonts();
-		}
-	});
+	releaseFonts();
+	fontsRequested = true;
+	fontReload.request();
+	fontReloadRequestedAt = std::chrono::steady_clock::now();
+}
+
+void pumpFontReload() {
+	if (unloading.load() || APIDefs == nullptr) {
+		return;
+	}
+	if (fontReload.state != FontReloadState::WaitingForRelease) {
+		return;
+	}
+	float elapsed = 0.0f;
+	if (fontReloadRequestedAt.has_value()) {
+		elapsed = std::chrono::duration<float>(
+			std::chrono::steady_clock::now() - *fontReloadRequestedAt).count();
+	}
+	if (!fontReload.shouldLoadFonts(renderer.isCleared(), elapsed)) {
+		return;
+	}
+	fontReload.cancel();
+	fontReloadRequestedAt.reset();
+	registerCjkGlyphSeed(getAddonFolder());
+	loadFonts();
 }
 
 void releaseFonts() {

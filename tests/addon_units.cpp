@@ -1,10 +1,14 @@
+#include "FontReload.h"
 #include "PopupAnimation.h"
 #include "SectorGeometry.h"
 #include "Settings.h"
+#include "SettingsBackup.h"
+#include "WideUtf8.h"
 #include "service/MapInventory.h"
 
 #include <cmath>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -93,6 +97,59 @@ static void testInventoryReplace() {
 	check(inventory.getMapInfo("en", 15) == nullptr, "inventory other locale missing");
 }
 
+static void testUtf8DestCapacity() {
+	check(utf8DestCapacityForWideCharSize(0) == 0, "utf8 dest capacity zero");
+	check(utf8DestCapacityForWideCharSize(-1) == 0, "utf8 dest capacity negative");
+	check(utf8DestCapacityForWideCharSize(1) == 1, "utf8 dest capacity empty-plus-nul");
+	check(utf8DestCapacityForWideCharSize(12) == 12, "utf8 dest capacity includes nul");
+	check(utf8DestCapacityForWideCharSize(12) > 12 - 1, "utf8 dest capacity is not size-minus-one");
+	check(utf8PayloadLengthFromWideCharWritten(12) == 11, "utf8 payload drops trailing nul");
+	check(utf8PayloadLengthFromWideCharWritten(1) == 0, "utf8 payload empty string");
+	check(utf8PayloadLengthFromWideCharWritten(0) == 0, "utf8 payload zero written");
+}
+
+static void testSettingsBackupPath() {
+	check(settingsBackupCandidate("/addons/settings.json", 0) == "/addons/settings.json.bad",
+		"settings backup preferred name");
+	check(settingsBackupCandidate("/addons/settings.json", 1) == "/addons/settings.json.bad.1",
+		"settings backup first suffix");
+
+	std::set<std::string> existing;
+	auto exists = [&](const std::string& path) {
+		return existing.contains(path);
+	};
+	check(nextSettingsBackupPath("/addons/settings.json", exists) == "/addons/settings.json.bad",
+		"settings backup unused preferred");
+
+	existing.insert("/addons/settings.json.bad");
+	check(nextSettingsBackupPath("/addons/settings.json", exists) == "/addons/settings.json.bad.1",
+		"settings backup when .bad exists");
+
+	existing.insert("/addons/settings.json.bad.1");
+	existing.insert("/addons/settings.json.bad.2");
+	check(nextSettingsBackupPath("/addons/settings.json", exists) == "/addons/settings.json.bad.3",
+		"settings backup skips occupied suffixes");
+}
+
+static void testFontReloadSchedule() {
+	FontReloadSchedule reload;
+	check(reload.state == FontReloadState::Idle, "font reload starts idle");
+	check(!reload.shouldLoadFonts(true, 1.0f), "font reload idle does not load");
+
+	reload.request();
+	check(reload.state == FontReloadState::WaitingForRelease, "font reload waits after request");
+	check(!reload.shouldLoadFonts(false, 1.0f), "font reload waits until fonts cleared");
+	check(!reload.shouldLoadFonts(true, 0.0f), "font reload waits for grace period");
+	check(!reload.shouldLoadFonts(true, FontReloadSchedule::kGraceSeconds - 0.001f),
+		"font reload still waiting just before grace");
+	check(reload.shouldLoadFonts(true, FontReloadSchedule::kGraceSeconds),
+		"font reload loads after clear and grace");
+
+	reload.cancel();
+	check(reload.state == FontReloadState::Idle, "font reload cancel returns idle");
+	check(!reload.shouldLoadFonts(true, 1.0f), "font reload cancelled does not load");
+}
+
 static void testPointInPolygon() {
 	struct Point {
 		float x;
@@ -114,6 +171,9 @@ int main() {
 	testPopupOpacity();
 	testInventoryReplace();
 	testPointInPolygon();
+	testUtf8DestCapacity();
+	testSettingsBackupPath();
+	testFontReloadSchedule();
 	std::cout << g_passes << " passed, " << g_failures << " failed\n";
 	return g_failures == 0 ? 0 : 1;
 }
