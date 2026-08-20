@@ -122,7 +122,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
 	AddonDef.Version.Major = 1;
 	AddonDef.Version.Minor = 5;
 	AddonDef.Version.Build = 1;
-	AddonDef.Version.Revision = 4;
+	AddonDef.Version.Revision = 5;
 	AddonDef.Author = "HeavyMetalPirate.2695";
 	AddonDef.Description = "Chinese-locale fork of Regions of Tyria: displays the current sector whenever you cross borders.";
 	AddonDef.Load = AddonLoad;

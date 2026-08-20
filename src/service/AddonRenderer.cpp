@@ -907,10 +907,18 @@ std::string replacePlaceholderTexts(std::string text, bool useSampleText) {
 	MapData* currentMap = currentMapService.getCurrentMap();
 
 	if (useSampleText || currentMap == nullptr) {
-		continent = "Continent";
-		region = "Region";
-		map = "Map";
-		sector = "Sector";
+		if (settings.locale == Locale::Zh) {
+			continent = "泰瑞亚";
+			region = "科瑞塔";
+			map = "女王谷";
+			sector = "狮子拱门";
+		}
+		else {
+			continent = "Continent";
+			region = "Region";
+			map = "Map";
+			sector = "Sector";
+		}
 	}
 	else {
 		continent = currentMap->continentName;
@@ -931,9 +939,16 @@ std::string replacePlaceholderTexts(std::string text, bool useSampleText) {
 	// Replace WvW Team placeholders
 	// guess what? still to lazy to do it properly. what is maintenance, right?
 	std::string redTeamText, blueTeamText, greenTeamText;
-	redTeamText = "Red";
-	blueTeamText = "Blue";
-	greenTeamText = "Green";
+	if (settings.locale == Locale::Zh) {
+		redTeamText = "红方";
+		blueTeamText = "蓝方";
+		greenTeamText = "绿方";
+	}
+	else {
+		redTeamText = "Red";
+		blueTeamText = "Blue";
+		greenTeamText = "Green";
+	}
 
 	if (match != nullptr) {
 		gw2api::worlds::world* redWorld = worldInventory->getWorld(GetLocaleAsString(settings.locale), match->worlds.red);

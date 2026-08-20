@@ -157,7 +157,8 @@ def add_default_sector(map_info: dict[str, Any]) -> None:
 def merge_floor(
     maps: dict[str, dict[str, Any]],
     floor: dict[str, Any],
-    continent: dict[str, Any],
+    continent_id: int,
+    continent_name: str,
 ) -> None:
     for region in (floor.get("regions") or {}).values():
         if not isinstance(region, dict):
@@ -169,8 +170,8 @@ def merge_floor(
                 continue
             incoming = normalize_map(
                 raw_map,
-                int(continent["id"]),
-                continent.get("name") or "",
+                continent_id,
+                continent_name,
                 region_id,
                 region_name,
             )
@@ -226,6 +227,24 @@ def fetch_continents(client: Gw2Client) -> list[dict[str, Any]]:
     return continents
 
 
+def fetch_continent_names(client: Gw2Client, locale: str, continents: list[dict[str, Any]]) -> dict[int, str]:
+    names: dict[int, str] = {}
+    for continent in continents:
+        continent_id = int(continent["id"])
+        localized = client.get_json(f"/v2/continents/{continent_id}", {"lang": locale})
+        names[continent_id] = (localized or continent).get("name") or continent.get("name") or ""
+    print(f"[{locale}] continent names {names}", flush=True)
+    return names
+
+
+def apply_continent_names(maps: dict[str, dict[str, Any]], names: dict[int, str]) -> None:
+    for map_info in maps.values():
+        continent_id = int(map_info.get("continentId") or 0)
+        localized = names.get(continent_id)
+        if localized:
+            map_info["continentName"] = localized
+
+
 def load_locale_maps(
     client: Gw2Client,
     locale: str,
@@ -244,6 +263,7 @@ def load_locale_maps(
     maps: dict[str, dict[str, Any]] = {}
     completed = 0
     lock = threading.Lock()
+    continent_names = fetch_continent_names(client, locale, continents)
 
     def fetch_one(continent: dict[str, Any], floor_id: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
         payload = client.get_json(
@@ -259,7 +279,13 @@ def load_locale_maps(
             continent, payload = future.result()
             with lock:
                 if payload:
-                    merge_floor(maps, payload, continent)
+                    continent_id = int(continent["id"])
+                    merge_floor(
+                        maps,
+                        payload,
+                        continent_id,
+                        continent_names.get(continent_id) or continent.get("name") or "",
+                    )
                 completed += 1
                 if completed % 15 == 0 or completed == len(jobs):
                     print(
@@ -267,6 +293,7 @@ def load_locale_maps(
                         flush=True,
                     )
 
+    apply_continent_names(maps, continent_names)
     for map_info in maps.values():
         add_default_sector(map_info)
     return maps
@@ -298,6 +325,13 @@ def validate_maps(locale: str, maps: dict[str, dict[str, Any]]) -> list[str]:
     for key in ("id", "name", "map_rect", "continent_rect", "sectors", "regionId", "continentId"):
         if key not in sample:
             errors.append(f"{locale}: map missing {key}")
+    if locale == "zh":
+        queensdale_continent = (maps.get("15") or {}).get("continentName")
+        if queensdale_continent != "泰瑞亚":
+            errors.append(f"zh: Queensdale continentName is {queensdale_continent!r}")
+        mists_name = next((m.get("continentName") for m in maps.values() if m.get("continentId") == 2), "")
+        if mists_name != "迷雾之地":
+            errors.append(f"zh: Mists continentName is {mists_name!r}")
     return errors
 
 

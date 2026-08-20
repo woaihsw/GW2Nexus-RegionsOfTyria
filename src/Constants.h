@@ -6,7 +6,7 @@ static const char* ADDON_NAME_LONG = "Regions Of Tyria";
 static const char* KB_MFA = "KB_TYRIAN_REGION_DEBUGGER";
 
 static const int fontsVersion = 2;
-static const int packedResourcesVersion = 2;
+static const int packedResourcesVersion = 3;
 static const char* CJK_SEED_FILE = "cjk_seed.txt";
 
 const std::string baseUrl = "https://api.guildwars2.com";
