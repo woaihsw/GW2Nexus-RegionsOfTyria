@@ -122,7 +122,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
 	AddonDef.Version.Major = 1;
 	AddonDef.Version.Minor = 5;
 	AddonDef.Version.Build = 1;
-	AddonDef.Version.Revision = 5;
+	AddonDef.Version.Revision = 6;
 	AddonDef.Author = "HeavyMetalPirate.2695";
 	AddonDef.Description = "Chinese-locale fork of Regions of Tyria: displays the current sector whenever you cross borders.";
 	AddonDef.Load = AddonLoad;
@@ -390,7 +390,7 @@ void AddonRender()
 	if (settings.fontsVersion < fontsVersion) {
 		ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
 			ImGuiWindowFlags_AlwaysAutoResize;
-		if (ImGui::Begin("Font version upgraded"), nullptr, flags) {
+		if (ImGui::Begin("Font version upgraded", nullptr, flags)) {
 			ImGui::TextWrapped("Fonts for Regions of Tyria have been updated to a new version. Do you want to upgrade your local installation?");
 			ImGui::TextColored({ 255,0,0,1 }, "Warning: Upgrading the fonts will overwrite changes you made to the font files!");
 			ImGui::TextWrapped("You can backup your current fonts by copying the TTF files in your <GW2-Install>/addons/TyrianRegions folder.");
@@ -407,9 +407,8 @@ void AddonRender()
 			}
 
 			ImGui::TextWrapped("Note: you can always upgrade the fonts in the options if you choose to do so at a later point.");
-
-			ImGui::End();
 		}
+		ImGui::End();
 	}
 }
 
@@ -545,7 +544,7 @@ void AddonOptions()
 
 			++i;
 			if (ImGui::BeginTabItem(fs.race.c_str())) {
-				ImGui::Text(("Popup Text Settings for font " + fs.race).c_str());
+				ImGui::TextUnformatted(("Popup Text Settings for font " + fs.race).c_str());
 
 				if (ImGui::Checkbox("Show sample text", &showTemplate[i])) {
 					if (showTemplate[i]) {
@@ -630,7 +629,7 @@ void AddonOptions()
 				
 
 				ImGui::Separator();
-				ImGui::Text(("Widget Settings for font " + fs.race).c_str());
+				ImGui::TextUnformatted(("Widget Settings for font " + fs.race).c_str());
 				char bufferWidget[256];
 				strncpy_s(bufferWidget, fs.widgetDisplayFormat.c_str(), sizeof(bufferWidget));
 				if (ImGui::InputText("Widget Display Format", bufferWidget, sizeof(bufferWidget))) {

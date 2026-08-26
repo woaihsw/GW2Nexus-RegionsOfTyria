@@ -1,6 +1,6 @@
 #include "MapLoaderService.h"
 #include <Windows.h>
-#include <limits>
+#include "../MapSectorMerge.h"
 #include "../resource.h"
 
 #include "../ziplib/src/zip.h"
@@ -8,21 +8,6 @@
 
 int timeoutCounter = 0;
 int retryCounter = 0;
-
-static void addDefaultSector(gw2::map& mapInfo) {
-	if (mapInfo.sectors.size() > 0) {
-		return;
-	}
-
-	gw2api::continents::sector empty = gw2api::continents::sector();
-	empty.id = -1;
-	empty.name = mapInfo.name;
-	empty.level = 80;
-	empty.chatLink = "undefined";
-	empty.bounds.push_back({ std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() });
-	empty.bounds.push_back({ std::numeric_limits<float>::max(), std::numeric_limits<float>::max() });
-	mapInfo.sectors.emplace("-1", empty);
-}
 
 static int on_extract_entry(const char* filename, void* arg) {
 	static int i = 0;
@@ -165,8 +150,12 @@ void MapLoaderService::requestMapFromAPI(std::string locale, int mapId) {
 	std::string requestKey = locale + ":" + std::to_string(mapId);
 	{
 		std::lock_guard<std::mutex> lock(requestMutex);
-		if (failedMaps.contains(requestKey)) return;
 		if (pendingMaps.contains(requestKey)) return;
+		auto failed = failedMaps.find(requestKey);
+		if (failed != failedMaps.end()
+			&& !mapRetryIsDue(std::chrono::steady_clock::now(), failed->second)) {
+			return;
+		}
 		pendingMaps.insert(requestKey);
 	}
 
@@ -174,9 +163,14 @@ void MapLoaderService::requestMapFromAPI(std::string locale, int mapId) {
 		bool loaded = loadMapFromAPI(locale, mapId);
 		std::lock_guard<std::mutex> lock(requestMutex);
 		pendingMaps.erase(requestKey);
-		if (!loaded) {
-			failedMaps.insert(requestKey);
+		if (loaded) {
+			failedMaps.erase(requestKey);
+			return;
 		}
+
+		MapLoadRetryState& state = failedMaps[requestKey];
+		state.failureCount++;
+		state.nextRetryAt = std::chrono::steady_clock::now() + mapRetryDelay(state.failureCount);
 	});
 }
 
@@ -525,27 +519,16 @@ void MapLoaderService::loadAllMapsFromApi() {
 					for (auto entry: region.second.maps) {
 						std::string id = entry.first;
 						gw2api::continents::map* map = &entry.second;
-
-						gw2api::continents::map mapInfo;
-
-						if (mapInfos.count(id)) {
-							mapInfo = mapInfos[id];
-						}
-						else {
-							mapInfo = *map;
-							// enrich with additional data
+						const bool inserted = mapInfos.count(id) == 0;
+						gw2api::continents::map& mapInfo = storedMapForMerge(mapInfos, id, *map);
+						if (inserted) {
 							mapInfo.continentId = continentJson["id"];
 							mapInfo.continentName = continentJson["name"];
 							mapInfo.regionId = region.second.id;
 							mapInfo.regionName = region.second.name;
-							// end enrichment
-							mapInfos.emplace(id, mapInfo);
 						}
 
-						for (auto sector: map->sectors)
-						{
-							mapInfo.sectors.emplace(sector);
-						}
+						mergeMapSectors(mapInfo, *map);
 					}
 				}
 			}
@@ -554,20 +537,9 @@ void MapLoaderService::loadAllMapsFromApi() {
 		// precautionary if we made it here without unloading, store the map data
 		if (unloading.load()) return;
 
-		// fill up empty maps with default sectors
-		for (auto map: mapInfos)
+		for (auto& map : mapInfos)
 		{
-			// add default sector to maps without sectors
-			if (map.second.sectors.size() == 0) {
-				gw2api::continents::sector empty = gw2api::continents::sector();
-				empty.id = -1;
-				empty.name = map.second.name;
-				empty.level = 80;
-				empty.chatLink = "undefined";
-				empty.bounds.push_back({ std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() });
-				empty.bounds.push_back({ std::numeric_limits<float>::max(), std::numeric_limits<float>::max() });
-				map.second.sectors.emplace("-1", empty);
-			}
+			addDefaultSector(map.second);
 		}
 
 		// add all maps found to the inventory

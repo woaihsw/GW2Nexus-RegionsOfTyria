@@ -1,4 +1,6 @@
 #include "FontReload.h"
+#include "MapRetry.h"
+#include "MapSectorMerge.h"
 #include "PopupAnimation.h"
 #include "SectorGeometry.h"
 #include "Settings.h"
@@ -6,8 +8,10 @@
 #include "WideUtf8.h"
 #include "service/MapInventory.h"
 
+#include <chrono>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -150,6 +154,89 @@ static void testFontReloadSchedule() {
 	check(!reload.shouldLoadFonts(true, 1.0f), "font reload cancelled does not load");
 }
 
+static void testMapRetryDelay() {
+	check(mapRetryDelay(0).count() == 0, "retry delay zero failures");
+	check(mapRetryDelay(-1).count() == 0, "retry delay negative failures");
+	check(mapRetryDelay(1) == kMapRetryInitialDelay, "retry delay first failure is 30s");
+	check(mapRetryDelay(1).count() == 30, "retry delay first failure seconds");
+	check(mapRetryDelay(2).count() == 60, "retry delay second failure is 60s");
+	check(mapRetryDelay(3).count() == 120, "retry delay third failure is 120s");
+	check(mapRetryDelay(4).count() == 240, "retry delay fourth failure is 240s");
+	check(mapRetryDelay(5) == kMapRetryMaxDelay, "retry delay fifth failure caps at 5 minutes");
+	check(mapRetryDelay(5).count() == 300, "retry delay cap is 300 seconds");
+	check(mapRetryDelay(6) == kMapRetryMaxDelay, "retry delay sixth failure remains capped");
+	check(mapRetryDelay(32) == kMapRetryMaxDelay, "retry delay large failure count remains capped");
+
+	const auto now = std::chrono::steady_clock::time_point(std::chrono::seconds(1000));
+	MapLoadRetryState waiting;
+	waiting.failureCount = 1;
+	waiting.nextRetryAt = now + mapRetryDelay(waiting.failureCount);
+	check(!mapRetryIsDue(now, waiting), "retry not due before backoff elapses");
+	check(mapRetryIsDue(waiting.nextRetryAt, waiting), "retry due exactly at backoff");
+	check(mapRetryIsDue(waiting.nextRetryAt + std::chrono::seconds(1), waiting), "retry due after backoff");
+}
+
+static void testSectorMergeAndDefault() {
+	gw2api::continents::map floor1{};
+	floor1.id = 15;
+	floor1.name = "Queensdale";
+	gw2api::continents::sector sectorOne{};
+	sectorOne.id = 1;
+	sectorOne.name = "Shaemoor";
+	floor1.sectors.emplace("1", sectorOne);
+
+	gw2api::continents::map floor2{};
+	floor2.id = 15;
+	floor2.name = "Queensdale-floor2";
+	gw2api::continents::sector sectorTwo{};
+	sectorTwo.id = 2;
+	sectorTwo.name = "Township";
+	floor2.sectors.emplace("2", sectorTwo);
+	gw2api::continents::sector sectorOneDup{};
+	sectorOneDup.id = 1;
+	sectorOneDup.name = "Shaemoor-dup";
+	floor2.sectors.emplace("1", sectorOneDup);
+
+	std::map<std::string, gw2api::continents::map> mapInfos;
+	{
+		const bool inserted = mapInfos.count("15") == 0;
+		gw2api::continents::map& stored = storedMapForMerge(mapInfos, "15", floor1);
+		check(inserted, "sector merge first occurrence inserts");
+		if (inserted) {
+			stored.name = floor1.name;
+		}
+		mergeMapSectors(stored, floor1);
+	}
+	{
+		const bool inserted = mapInfos.count("15") == 0;
+		gw2api::continents::map& stored = storedMapForMerge(mapInfos, "15", floor2);
+		check(!inserted, "sector merge later occurrence reuses stored map");
+		if (inserted) {
+			stored.name = floor2.name;
+		}
+		mergeMapSectors(stored, floor2);
+	}
+
+	check(mapInfos["15"].sectors.size() == 2, "sector merge keeps sectors from every floor");
+	check(mapInfos["15"].name == "Queensdale", "sector merge does not replace stored map metadata");
+	check(mapInfos["15"].sectors["1"].name == "Shaemoor", "sector merge keeps first sector on duplicate id");
+	check(mapInfos["15"].sectors["2"].name == "Township", "sector merge adds new floor sector");
+
+	addDefaultSector(mapInfos["15"]);
+	check(mapInfos["15"].sectors.size() == 2, "default sector skipped when sectors exist");
+
+	std::map<std::string, gw2api::continents::map> emptyInfos;
+	gw2api::continents::map emptyMap{};
+	emptyMap.id = 99;
+	emptyMap.name = "Empty Map";
+	emptyInfos.emplace("99", emptyMap);
+	addDefaultSector(emptyInfos["99"]);
+	check(emptyInfos["99"].sectors.size() == 1, "default sector persists on stored empty map");
+	check(emptyInfos["99"].sectors.contains("-1"), "default sector uses -1 key");
+	check(emptyInfos["99"].sectors["-1"].id == -1, "default sector id is -1");
+	check(emptyInfos["99"].sectors["-1"].name == "Empty Map", "default sector uses map name");
+}
+
 static void testPointInPolygon() {
 	struct Point {
 		float x;
@@ -174,6 +261,8 @@ int main() {
 	testUtf8DestCapacity();
 	testSettingsBackupPath();
 	testFontReloadSchedule();
+	testMapRetryDelay();
+	testSectorMergeAndDefault();
 	std::cout << g_passes << " passed, " << g_failures << " failed\n";
 	return g_failures == 0 ? 0 : 1;
 }

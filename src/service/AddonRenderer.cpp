@@ -7,6 +7,12 @@ using json = nlohmann::json;
 
 std::string replacePlaceholderTexts(std::string text, bool useSampleText);
 
+static void TextColoredUnformatted(const ImVec4& color, const char* text) {
+	ImGui::PushStyleColor(ImGuiCol_Text, color);
+	ImGui::TextUnformatted(text);
+	ImGui::PopStyleColor();
+}
+
 std::optional<std::chrono::steady_clock::time_point> popupAnimationStart;
 float opacity = 0.0f;
 
@@ -361,6 +367,7 @@ void Renderer::renderSampleInfo() {
 #ifndef NDEBUG
 		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "Could not find font settings, possibly still initializing.");
 #endif
+		setRacialFont(originalPick);
 		return;
 	}
 
@@ -446,7 +453,7 @@ void Renderer::renderMinimapWidget() {
 		case 1: // shadow
 			ImGui::SetCursorPosX(textX + fontSettings->fontBorderOffset);
 			ImGui::SetCursorPosY(1.0f);
-			ImGui::TextColored(shadowColor, output.c_str());
+			TextColoredUnformatted(shadowColor, output.c_str());
 			break;
 		case 2: // full border
 			ImGui::SetCursorPosX(textX - fontSettings->fontBorderOffset);
@@ -458,7 +465,7 @@ void Renderer::renderMinimapWidget() {
 				for (int y = 0; y <= fontSettings->fontBorderOffset * 2; y++)
 				{
 					ImGui::SetCursorPos({ currentPos.x + static_cast<float>(x), currentPos.y + static_cast<float>(y) });
-					ImGui::TextColored(shadowColor, output.c_str());
+					TextColoredUnformatted(shadowColor, output.c_str());
 				}
 			}	
 			break;
@@ -466,10 +473,10 @@ void Renderer::renderMinimapWidget() {
 		
 		ImGui::SetCursorPosX(textX);
 		ImGui::SetCursorPosY(0.0f);
-		ImGui::TextColored(textColor, output.c_str());
+		TextColoredUnformatted(textColor, output.c_str());
 		ImGui::PopFont();
-		ImGui::End();
 	}
+	ImGui::End();
 }
 
 void Renderer::renderSectorInfo() {
@@ -585,16 +592,16 @@ void Renderer::renderInfo(float opacityOverride, bool useSampleText) {
 		}
 
 		// still not loaded - might occurr during font reload so skip now
-		if (fontLarge == nullptr || !fontLarge->IsLoaded()) { fontsPicked = false; return; }
-		if (fontSmall == nullptr || !fontSmall->IsLoaded()) { fontsPicked = false; return; }
-		if (fontAnimLarge == nullptr || !fontAnimLarge->IsLoaded()) { fontsPicked = false; return; }
-		if (fontAnimSmall == nullptr || !fontAnimSmall->IsLoaded()) { fontsPicked = false; return; }
-
-		// Large Text
-		centerText(largeText, fontSettings->verticalPosition, opacityOverride);
-
-		// Small Text
-		centerTextSmall(smallText, fontSettings->verticalPosition - fontSettings->spacing, opacityOverride);
+		if (fontLarge == nullptr || !fontLarge->IsLoaded()
+			|| fontSmall == nullptr || !fontSmall->IsLoaded()
+			|| fontAnimLarge == nullptr || !fontAnimLarge->IsLoaded()
+			|| fontAnimSmall == nullptr || !fontAnimSmall->IsLoaded()) {
+			fontsPicked = false;
+		}
+		else {
+			centerText(largeText, fontSettings->verticalPosition, opacityOverride);
+			centerTextSmall(smallText, fontSettings->verticalPosition - fontSettings->spacing, opacityOverride);
+		}
 	}
 	ImGui::End();
 }
@@ -608,17 +615,17 @@ void Renderer::renderDebugInfo() {
 		ImGui::PushFont((ImFont*)NexusLink->Font);
 
 		ImGui::Text("Player information");
-		ImGui::Text(("GlobalX: " + std::to_string(MumbleLink->Context.Compass.PlayerPosition.X)).c_str());
-		ImGui::Text(("GlobalY: " + std::to_string(MumbleLink->Context.Compass.PlayerPosition.Y)).c_str());
+		ImGui::TextUnformatted(("GlobalX: " + std::to_string(MumbleLink->Context.Compass.PlayerPosition.X)).c_str());
+		ImGui::TextUnformatted(("GlobalY: " + std::to_string(MumbleLink->Context.Compass.PlayerPosition.Y)).c_str());
 
 		gw2::coordinate calcPos = currentMapService.calculatePos();
-		ImGui::Text(("CalculatedX: " + std::to_string(calcPos.x)).c_str());
-		ImGui::Text(("CalculatedY: " + std::to_string(calcPos.y)).c_str());
+		ImGui::TextUnformatted(("CalculatedX: " + std::to_string(calcPos.x)).c_str());
+		ImGui::TextUnformatted(("CalculatedY: " + std::to_string(calcPos.y)).c_str());
 
 		ImGui::Separator();
 		ImGui::Text("Mumble Information");
-		ImGui::Text(("Map Id: " + std::to_string(MumbleLink->Context.MapID)).c_str());
-		ImGui::Text(("Competitive: " + std::to_string(MumbleLink->Context.IsCompetitive)).c_str());
+		ImGui::TextUnformatted(("Map Id: " + std::to_string(MumbleLink->Context.MapID)).c_str());
+		ImGui::TextUnformatted(("Competitive: " + std::to_string(MumbleLink->Context.IsCompetitive)).c_str());
 
 		ImGui::Separator();
 		ImGui::Text("Current Map Data");
@@ -627,14 +634,14 @@ void Renderer::renderDebugInfo() {
 			ImGui::TextColored(ImVec4(255, 0, 0, 1), "No map found in inventory!");
 		}
 		else {
-			ImGui::Text(("Map Id: " + std::to_string(currentMap->id)).c_str());
-			ImGui::Text(("Map Name: " + currentMap->name).c_str());
-			ImGui::Text(("Region Id: " + std::to_string(currentMap->regionId)).c_str());
-			ImGui::Text(("Region Name: " + currentMap->regionName).c_str());
-			ImGui::Text(("Continent Id: " + std::to_string(currentMap->continentId)).c_str());
-			ImGui::Text(("Continent Name: " + currentMap->continentName).c_str());
-			ImGui::Text(("Current Sector Id: " + std::to_string(currentMap->currentSector.id)).c_str());
-			ImGui::Text(("Current Sector Name: " + currentMap->currentSector.name).c_str());
+			ImGui::TextUnformatted(("Map Id: " + std::to_string(currentMap->id)).c_str());
+			ImGui::TextUnformatted(("Map Name: " + currentMap->name).c_str());
+			ImGui::TextUnformatted(("Region Id: " + std::to_string(currentMap->regionId)).c_str());
+			ImGui::TextUnformatted(("Region Name: " + currentMap->regionName).c_str());
+			ImGui::TextUnformatted(("Continent Id: " + std::to_string(currentMap->continentId)).c_str());
+			ImGui::TextUnformatted(("Continent Name: " + currentMap->continentName).c_str());
+			ImGui::TextUnformatted(("Current Sector Id: " + std::to_string(currentMap->currentSector.id)).c_str());
+			ImGui::TextUnformatted(("Current Sector Name: " + currentMap->currentSector.name).c_str());
 		}
 
 		ImGui::Separator();
@@ -649,19 +656,19 @@ void Renderer::renderDebugInfo() {
 					ImGui::Text("Map not loaded");
 				}
 				else {
-					ImGui::Text(("Map Id: " + std::to_string(inventoryMap->id)).c_str());
-					ImGui::Text(("Map Name: " + inventoryMap->name).c_str());
-					ImGui::Text(("Region Id: " + std::to_string(inventoryMap->regionId)).c_str());
-					ImGui::Text(("Region Name: " + inventoryMap->regionName).c_str());
-					ImGui::Text(("Continent Id: " + std::to_string(inventoryMap->continentId)).c_str());
-					ImGui::Text(("Continent Name: " + inventoryMap->continentName).c_str());
-					ImGui::Text(("MinLevel: " + std::to_string(inventoryMap->minLevel)).c_str());
-					ImGui::Text(("MaxLevel: " + std::to_string(inventoryMap->maxLevel)).c_str());
+					ImGui::TextUnformatted(("Map Id: " + std::to_string(inventoryMap->id)).c_str());
+					ImGui::TextUnformatted(("Map Name: " + inventoryMap->name).c_str());
+					ImGui::TextUnformatted(("Region Id: " + std::to_string(inventoryMap->regionId)).c_str());
+					ImGui::TextUnformatted(("Region Name: " + inventoryMap->regionName).c_str());
+					ImGui::TextUnformatted(("Continent Id: " + std::to_string(inventoryMap->continentId)).c_str());
+					ImGui::TextUnformatted(("Continent Name: " + inventoryMap->continentName).c_str());
+					ImGui::TextUnformatted(("MinLevel: " + std::to_string(inventoryMap->minLevel)).c_str());
+					ImGui::TextUnformatted(("MaxLevel: " + std::to_string(inventoryMap->maxLevel)).c_str());
 					if (ImGui::CollapsingHeader("Sectors")) {
 						for (auto sector : inventoryMap->sectors) {
 							if (ImGui::CollapsingHeader((std::to_string(sector.second.id) + ": " + sector.second.name).c_str())) {
 								json j = sector.second;
-								ImGui::Text(j.dump(4).c_str());
+								ImGui::TextUnformatted(j.dump(4).c_str());
 							}
 						}
 					}
@@ -674,33 +681,33 @@ void Renderer::renderDebugInfo() {
 				ImGui::TextColored(ImVec4(255, 0, 0, 1), "No match data loaded!");
 			}
 			else {
-				ImGui::Text(("Id: " + match->id).c_str());
+				ImGui::TextUnformatted(("Id: " + match->id).c_str());
 				gw2api::worlds::world* red = worldInventory->getWorld(GetLocaleAsString(settings.locale), match->worlds.red);
 				gw2api::worlds::world* blue = worldInventory->getWorld(GetLocaleAsString(settings.locale), match->worlds.blue);
 				gw2api::worlds::world* green = worldInventory->getWorld(GetLocaleAsString(settings.locale), match->worlds.green);
 
-				ImGui::Text(("Red world: " + std::to_string(match->worlds.red)).c_str());
+				ImGui::TextUnformatted(("Red world: " + std::to_string(match->worlds.red)).c_str());
 				if (red == nullptr) {
 					ImGui::TextColored(ImVec4(255, 0, 0, 1), "Red Team unknown!");
 				}
 				else {
-					ImGui::Text(red->name.c_str());
+					ImGui::TextUnformatted(red->name.c_str());
 				}
 
-				ImGui::Text(("Blue world: " + std::to_string(match->worlds.blue)).c_str());
+				ImGui::TextUnformatted(("Blue world: " + std::to_string(match->worlds.blue)).c_str());
 				if (blue == nullptr) {
 					ImGui::TextColored(ImVec4(255, 0, 0, 1), "Blue Team unknown!");
 				}
 				else {
-					ImGui::Text(blue->name.c_str());
+					ImGui::TextUnformatted(blue->name.c_str());
 				}
 
-				ImGui::Text(("Green world: " + std::to_string(match->worlds.green)).c_str());
+				ImGui::TextUnformatted(("Green world: " + std::to_string(match->worlds.green)).c_str());
 				if (green == nullptr) {
 					ImGui::TextColored(ImVec4(255, 0, 0, 1), "Green Team unknown!");
 				}
 				else {
-					ImGui::Text(green->name.c_str());
+					ImGui::TextUnformatted(green->name.c_str());
 				}
 			}
 		}
@@ -717,13 +724,13 @@ void Renderer::renderDebugInfo() {
 					ImGui::PushFont((ImFont*)NexusLink->Font);
 					const char* debugname = font.first.c_str();
 					std::string message = "Error: Font is nullptr: " + std::string(debugname);
-					ImGui::Text(message.c_str());
+					ImGui::TextUnformatted(message.c_str());
 					ImGui::PopFont();
 				}
 				else if (font.second->IsLoaded()) {
 
 					std::string fontName = "Font name: " + std::string(font.second->ConfigData->Name) + ", Size : " + std::to_string(font.second->FontSize);
-					ImGui::Text(fontName.c_str());
+					ImGui::TextUnformatted(fontName.c_str());
 					ImGui::PushFont(font.second);
 					ImGui::Text("ABCDEFGHIJKLMNOPQRSTUVWXYZ_abdefghijklmnopqrstuvwxyz");
 					ImGui::PopFont();
@@ -732,7 +739,7 @@ void Renderer::renderDebugInfo() {
 					ImGui::PushFont((ImFont*)NexusLink->Font);
 					const char* debugname = font.second->GetDebugName();
 					std::string message = "Error: Font not loaded: " + std::string(debugname);
-					ImGui::Text(message.c_str());
+					ImGui::TextUnformatted(message.c_str());
 					ImGui::PopFont();
 				}
 				ImGui::Separator();

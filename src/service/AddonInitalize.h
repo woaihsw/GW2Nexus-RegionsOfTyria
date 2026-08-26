@@ -62,23 +62,23 @@ static void storeMapResourceMarker(const std::string& pathFolder) {
 	}
 }
 
-static void extractPackedMaps(const std::string& pathFolder) {
+static bool extractPackedMaps(const std::string& pathFolder) {
 	HRSRC hResource = FindResource(hSelf, MAKEINTRESOURCE(IDR_MAPS_ZIP), L"ZIP");
 	if (hResource == NULL) {
 		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Did not find packed maps resource.");
-		return;
+		return false;
 	}
 
 	HGLOBAL hLoadedResource = LoadResource(hSelf, hResource);
 	if (hLoadedResource == NULL) {
 		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Could not load packed maps resource.");
-		return;
+		return false;
 	}
 
 	LPVOID lpResourceData = LockResource(hLoadedResource);
 	if (lpResourceData == NULL) {
 		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Could not lock packed maps resource.");
-		return;
+		return false;
 	}
 
 	if (!fs::exists(pathFolder)) {
@@ -87,7 +87,7 @@ static void extractPackedMaps(const std::string& pathFolder) {
 		}
 		catch (const std::exception&) {
 			APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, ("Could not create addon directory: " + pathFolder).c_str());
-			return;
+			return false;
 		}
 	}
 
@@ -100,9 +100,14 @@ static void extractPackedMaps(const std::string& pathFolder) {
 		&arg);
 	if (err != 0) {
 		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Failed to extract packed maps from module.");
-		return;
+		return false;
 	}
 	APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Packed map data extracted from module.");
+	if (!mapResourceFilesExist(pathFolder)) {
+		APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, "Packed map extraction did not produce the expected map files.");
+		return false;
+	}
+	return true;
 }
 
 static void unpackResource(const int resourceName, const std::string& resourceType, const std::string& targetFileName, bool overwrite = true) {
@@ -175,8 +180,7 @@ static void unpackResources() {
 	}
 	else {
 		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, "Packed map resources missing or outdated; extracting.");
-		extractPackedMaps(pathFolder);
-		if (mapResourceFilesExist(pathFolder)) {
+		if (extractPackedMaps(pathFolder)) {
 			storeMapResourceMarker(pathFolder);
 		}
 	}

@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <set>
@@ -11,6 +12,7 @@
 #include <thread>
 
 #include "../Globals.h"
+#include "../MapRetry.h"
 #include "../entity/GW2API_Continents.h"
 #include "../entity/GW2API_Worlds.h"
 #include "../entity/GW2API_WvW.h"
@@ -44,7 +46,7 @@ private:
 	std::mutex requestMutex;
 	std::set<std::string> pendingLocales;
 	std::set<std::string> pendingMaps;
-	std::set<std::string> failedMaps;
+	std::map<std::string, MapLoadRetryState> failedMaps;
 
 	std::mutex queueMutex;
 	std::condition_variable queueCv;
