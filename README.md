@@ -14,6 +14,7 @@ It is an unofficial port of the BlishHUD module [bhm-zone-display](https://githu
 - Per-font layout, color, size, and format strings
 - Locales: English, German, Spanish, French, and Chinese
 - Packed map names from the Guild Wars 2 API; missing maps can be fetched on demand
+- Native-size CJK glyphs in private ImGui textures, with small incremental pages for newly fetched map names
 
 ## Install
 
@@ -29,6 +30,12 @@ bump AddonDef.Version
 ```
 
 Packed fonts and map JSON extract into `<GW2Install>/addons/TyrianRegions` on first launch or when the packed resource version changes.
+
+Chinese map glyphs no longer register fonts or inject the map-name character set into Nexus's shared font atlas. The addon preloads only characters from the bundled name seed, cached API maps, and display templates. It shares matching face/size combinations and reuses Nexus's UI font for the English language-selector labels. The existing racial fonts still use Nexus's font service. A hot upgrade clears this addon's legacy localization seed once; subsequent API supplements do not touch the shared atlas.
+
+When an API map introduces new characters, its data waits until those characters have been rasterized at the configured sizes and uploaded to independent textures. Only then is the map published and its popup started; no restart is required. Preparation runs before the ImGui frame, so a new batch can cause a short preparation delay, but does not rebuild the Nexus atlas. Logs report private texture bytes and preparation time. Upload failures retain the pending data and retry after five seconds.
+
+API maps are saved as `api_maps_<locale>.json` in the addon directory. On the next launch their names join the initial glyph set, and map data is available without another API request. Updated bundled maps take precedence over cached entries. Deleting a cache file allows its maps to be fetched again. Chinese fonts are read from Windows' Fonts directory; if neither available system face covers a requested character, the log identifies it and the map stays pending rather than displaying a replacement glyph.
 
 ## Settings
 
@@ -47,6 +54,8 @@ Custom fonts live in `<GW2Install>/addons/TyrianRegions`:
 - Fade animation: `fonts_<race>_anim.ttf`
 
 Reloading fonts from options applies replacements. Resetting fonts overwrites those files with the packed defaults.
+
+For local CPU tests, install `fonts-droid-fallback` and `fonts-dejavu-core` (or set `ROT_TEST_CJK_FONT` and `ROT_TEST_LATIN_FONT` to compatible font files) and run `tests/run_units.sh`. The tests cover actual ImGui rasterization, map publication after successful upload, retry, cache reload, and drawing across multiple textures. Windows DLL compilation and an in-game DX11 check are separate from these tests.
 
 ## Regenerating map data
 

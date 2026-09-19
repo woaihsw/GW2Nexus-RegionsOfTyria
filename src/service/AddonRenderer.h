@@ -43,10 +43,6 @@ private:
 	void renderTextAnimation(const char* text, float opacityOverride, bool large, bool isShadow);
 	void centerText(std::string text, float textY, float opacityOverride);
 	void centerTextSmall(std::string text, float textY, float opacityOverride);
-	ImFont* getLoadedFont(const std::string& name);
-	ImFont* getRenderableFontForText(ImFont* preferred, ImFont* fallback, const char* text);
-	ImFont* getRenderableFontForCharacter(ImFont* preferred, ImFont* fallback, ImWchar character);
-	float calculateRenderedTextWidth(ImFont* preferred, ImFont* fallback, const char* text);
 
 };
 

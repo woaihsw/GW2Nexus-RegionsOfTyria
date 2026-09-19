@@ -12,11 +12,11 @@
 #include "service/MapLoaderService.h"
 #include "service/AddonRenderer.h"
 #include "service/AddonInitalize.h"
+#include "service/MapFontService.h"
 
 #include "Globals.h"
 #include "FontReload.h"
 #include "SettingsBackup.h"
-#include "WideUtf8.h"
 
 #include <chrono>
 #include <cstring>
@@ -43,8 +43,6 @@ void requestFontReload();
 void pumpFontReload();
 void releaseFonts();
 void ensureUiReady();
-bool loadCjkFonts(const std::string& addonFolder);
-void registerCjkGlyphSeed(const std::string& addonFolder);
 // Keybinds
 void ProcessKeybind(const char* aIdentifer, bool aIsRelease);
 // Events
@@ -67,6 +65,7 @@ gw2api::wvw::match* match      = nullptr;
 
 std::atomic<bool> unloading{ false };
 bool fontsRequested = false;
+bool legacySeedChecked = false;
 FontReloadSchedule fontReload;
 std::optional<std::chrono::steady_clock::time_point> fontReloadRequestedAt;
 
@@ -85,9 +84,6 @@ char displayFormatSmallBuffer[100] = "";
 char displayFormatLargeBuffer[100] = "";
 
 std::mutex identityMutex;
-ImVector<ImWchar> cjkGlyphRanges;
-ImFont* optionsCjkFont = nullptr;
-bool cjkGlyphSeedRegistered = false;
 
 /* services */
 Renderer renderer;
@@ -122,7 +118,7 @@ extern "C" __declspec(dllexport) AddonDefinition* GetAddonDef()
 	AddonDef.Version.Major = 1;
 	AddonDef.Version.Minor = 5;
 	AddonDef.Version.Build = 1;
-	AddonDef.Version.Revision = 6;
+	AddonDef.Version.Revision = 7;
 	AddonDef.Author = "HeavyMetalPirate.2695";
 	AddonDef.Description = "Chinese-locale fork of Regions of Tyria: displays the current sector whenever you cross borders.";
 	AddonDef.Load = AddonLoad;
@@ -161,6 +157,7 @@ void AddonLoad(AddonAPI* aApi)
 	mapInventory = std::make_unique<MapInventory>();
 	worldInventory = std::make_unique<WorldInventory>();
 	fontsRequested = false;
+	legacySeedChecked = false;
 
 	APIDefs->Events.Subscribe("EV_MUMBLE_IDENTITY_UPDATED", HandleIdentityChanged);
 	APIDefs->Events.Subscribe("EV_TYRIAN_REGIONS_CHECK", HandleAddonMetaData);
@@ -174,6 +171,7 @@ void AddonLoad(AddonAPI* aApi)
 		StoreSettings();
 	}
 
+	mapFonts.initialize(getAddonFolder());
 	mapLoader.initializeMapStorage();
 
 	// Add an options window and a regular render callback - always do this at the end I guess
@@ -190,6 +188,8 @@ void ReceiveFont(const char* aIdentifier, void* aFont) {
 	std::string str = aIdentifier;
 
 	if (aFont == nullptr) {
+		// Nexus invalidates all borrowed pointers before rebuilding its atlas.
+		renderer.clearFonts();
 #ifndef NDEBUG
 		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME,("Received nullptr for font " + std::string(aIdentifier)).c_str());
 #endif // !NDEBUG
@@ -207,30 +207,6 @@ void ReceiveFont(const char* aIdentifier, void* aFont) {
 	else if (str == "ROT_FONT_GENERIC_WIDGET")
 	{
 		renderer.registerFont(fontNameGenericWidget, (ImFont*)aFont);
-	}
-	else if (str == "ROT_FONT_CJK_OPTIONS")
-	{
-		optionsCjkFont = (ImFont*)aFont;
-	}
-	else if (str == "ROT_FONT_CJK_SMALL")
-	{
-		renderer.registerFont(fontNameCjkSmall, (ImFont*)aFont);
-	}
-	else if (str == "ROT_FONT_CJK_LARGE")
-	{
-		renderer.registerFont(fontNameCjkLarge, (ImFont*)aFont);
-	}
-	else if (str == "ROT_FONT_CJK_WIDGET")
-	{
-		renderer.registerFont(fontNameCjkWidget, (ImFont*)aFont);
-	}
-	else if (str == "ROT_FONT_CJK_ANIM_SMALL")
-	{
-		renderer.registerFont(fontNameCjkAnimSmall, (ImFont*)aFont);
-	}
-	else if (str == "ROT_FONT_CJK_ANIM_LARGE")
-	{
-		renderer.registerFont(fontNameCjkAnimLarge, (ImFont*)aFont);
 	}
 	else if (str == "ROT_FONT_ASURA_SMALL")
 	{
@@ -350,6 +326,7 @@ void AddonUnload()
 	APIDefs->Renderer.Deregister(PostRender);
 	APIDefs->Renderer.Deregister(AddonRender);
 	APIDefs->Renderer.Deregister(AddonOptions);
+	mapFonts.clear();
 
 	if (fontsRequested) {
 		releaseFonts();
@@ -366,6 +343,18 @@ void AddonUnload()
 /// </summary>
 void PreRender() {
 	pumpFontReload();
+	if (!legacySeedChecked && !unloading.load()) {
+		// Hot upgrades can leave the old addon's localized glyph seed in Nexus.
+		// Clear only our key, once; normal startup and API supplements set no text.
+		legacySeedChecked = true;
+		const char* key = "ROT_CJK_GLYPH_SEED";
+		for (const char* lang : {"en", "de", "es", "fr", "zh", "en-GB", "en-US", "de-DE", "es-ES", "fr-FR", "zh-CN"}) {
+			const char* old = APIDefs->Localization.TranslateTo(key, lang);
+			if (old && *old && std::strcmp(old, key) != 0)
+				APIDefs->Localization.Set(key, lang, "");
+		}
+	}
+	if (!unloading.load()) mapLoader.publishPreparedMaps();
 	renderer.preRender(ImGui::GetIO());
 }
 
@@ -433,9 +422,11 @@ void AddonOptions()
 	ImGui::Separator();
 	ImGui::Text("Locale");
 	ImGui::Text("");
-	bool pushedLocaleFont = optionsCjkFont != nullptr && optionsCjkFont->IsLoaded();
+	ImFont* localeFont = NexusLink ? static_cast<ImFont*>(NexusLink->FontUI) : nullptr;
+	if (!localeFont) localeFont = ImGui::GetIO().FontDefault;
+	bool pushedLocaleFont = localeFont != nullptr && localeFont->IsLoaded();
 	if (pushedLocaleFont) {
-		ImGui::PushFont(optionsCjkFont);
+		ImGui::PushFont(localeFont);
 	}
 	for (auto item : localeItems) {
 		bool selected = settings.locale == item.value;
@@ -771,140 +762,6 @@ void loadFont(std::string id, float size, std::string filename) {
 	APIDefs->Fonts.AddFromFile(id.c_str(), size > 0 ? size : 10, filename.c_str(), ReceiveFont, nullptr);
 }
 
-std::string wideToUtf8(const std::wstring& value) {
-	if (value.empty()) {
-		return {};
-	}
-	int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-	const int capacity = utf8DestCapacityForWideCharSize(size);
-	if (capacity <= 1) {
-		return {};
-	}
-	std::string utf8(static_cast<size_t>(capacity), '\0');
-	int written = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, utf8.data(), capacity, nullptr, nullptr);
-	if (written <= 0) {
-		return {};
-	}
-	utf8.resize(static_cast<size_t>(utf8PayloadLengthFromWideCharWritten(written)));
-	return utf8;
-}
-
-std::string windowsFontsDirectory() {
-	wchar_t windowsDir[MAX_PATH];
-	UINT length = GetWindowsDirectoryW(windowsDir, MAX_PATH);
-	if (length == 0 || length >= MAX_PATH) {
-		return "C:/Windows/Fonts";
-	}
-	return wideToUtf8(std::wstring(windowsDir) + L"\\Fonts");
-}
-
-std::vector<std::string> getSystemCjkFontCandidates() {
-	const std::string fontsDir = windowsFontsDirectory();
-	return {
-		fontsDir + "/msyh.ttc",
-		fontsDir + "/simsun.ttc",
-		fontsDir + "/simhei.ttf",
-		fontsDir + "/Deng.ttf",
-		fontsDir + "/msjh.ttc",
-		fontsDir + "/mingliu.ttc"
-	};
-}
-
-std::string getSystemCjkFontPath() {
-	for (const auto& candidate : getSystemCjkFontCandidates()) {
-		if (fs::exists(candidate)) {
-			return candidate;
-		}
-	}
-
-	return "";
-}
-
-std::string getSystemCjkAnimationFontPath(const std::string& primaryFontPath) {
-	for (const auto& candidate : getSystemCjkFontCandidates()) {
-		if (candidate != primaryFontPath && fs::exists(candidate)) {
-			return candidate;
-		}
-	}
-
-	return primaryFontPath;
-}
-
-std::string loadCjkSeedText(const std::string& addonFolder) {
-	std::ifstream seedFile(addonFolder + "/" + CJK_SEED_FILE, std::ios::binary);
-	if (!seedFile.is_open()) {
-		return "Español Français 中文";
-	}
-	std::stringstream buffer;
-	buffer << seedFile.rdbuf();
-	return buffer.str();
-}
-
-void registerCjkGlyphSeed(const std::string& addonFolder) {
-	if (cjkGlyphSeedRegistered || APIDefs == nullptr) {
-		return;
-	}
-
-	std::string seed = loadCjkSeedText(addonFolder);
-	std::vector<std::string> languageIdentifiers = {
-		"en", "de", "es", "fr", "zh",
-		"en-GB", "en-US", "de-DE", "es-ES", "fr-FR", "zh-CN"
-	};
-	for (const auto& languageIdentifier : languageIdentifiers) {
-		APIDefs->Localization.Set("ROT_CJK_GLYPH_SEED", languageIdentifier.c_str(), seed.c_str());
-	}
-	cjkGlyphSeedRegistered = true;
-	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Registered CJK glyph seed (" + std::to_string(seed.size()) + " bytes).").c_str());
-}
-
-const ImWchar* getCjkGlyphRanges(const std::string& addonFolder) {
-	if (cjkGlyphRanges.Size > 0) {
-		return cjkGlyphRanges.Data;
-	}
-
-	ImFontGlyphRangesBuilder builder;
-	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesDefault());
-	builder.AddRanges(ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
-	std::string seed = loadCjkSeedText(addonFolder);
-	if (!seed.empty()) {
-		builder.AddText(seed.c_str());
-	}
-
-	builder.BuildRanges(&cjkGlyphRanges);
-	return cjkGlyphRanges.Data;
-}
-
-bool loadCjkFonts(const std::string& addonFolder) {
-	std::string cjkFontPath = getSystemCjkFontPath();
-	if (cjkFontPath.empty()) {
-		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, "No system CJK font found. Chinese text may use ImGui fallback glyphs.");
-		return false;
-	}
-	std::string cjkAnimFontPath = getSystemCjkAnimationFontPath(cjkFontPath);
-
-	static ImFontConfig cjkFontConfig;
-	cjkFontConfig = ImFontConfig();
-	cjkFontConfig.OversampleH = 1;
-	cjkFontConfig.OversampleV = 1;
-	cjkFontConfig.GlyphRanges = getCjkGlyphRanges(addonFolder);
-
-	float optionsFontSize = 16.0f;
-	if (NexusLink != nullptr && NexusLink->FontUI != nullptr) {
-		optionsFontSize = ((ImFont*)NexusLink->FontUI)->FontSize;
-	}
-	else if (NexusLink != nullptr && NexusLink->Font != nullptr) {
-		optionsFontSize = ((ImFont*)NexusLink->Font)->FontSize;
-	}
-
-	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_OPTIONS", optionsFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
-	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_SMALL", settings.fontSettings[0].smallFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
-	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_LARGE", settings.fontSettings[0].largeFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
-	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_WIDGET", settings.fontSettings[0].widgetFontSize, cjkFontPath.c_str(), ReceiveFont, &cjkFontConfig);
-	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_ANIM_SMALL", settings.fontSettings[0].smallFontSize, cjkAnimFontPath.c_str(), ReceiveFont, &cjkFontConfig);
-	APIDefs->Fonts.AddFromFile("ROT_FONT_CJK_ANIM_LARGE", settings.fontSettings[0].largeFontSize, cjkAnimFontPath.c_str(), ReceiveFont, &cjkFontConfig);
-	return true;
-}
-
 void loadFonts() {
 	std::string pathFolder = APIDefs->Paths.GetAddonDirectory(ADDON_NAME);
 	loadFont("ROT_FONT_GENERIC_SMALL", settings.fontSettings[0].smallFontSize, (pathFolder + "/font_generic.ttf").c_str());
@@ -940,7 +797,6 @@ void loadFonts() {
 	loadFont("ROT_FONT_SYLVARI_ANIM_SMALL", settings.fontSettings[5].smallFontSize, (pathFolder + "/fonts_sylvari_anim.ttf").c_str());
 	loadFont("ROT_FONT_SYLVARI_ANIM_LARGE", settings.fontSettings[5].largeFontSize, (pathFolder + "/fonts_sylvari_anim.ttf").c_str());
 
-	loadCjkFonts(pathFolder);
 }	
 
 
@@ -952,7 +808,6 @@ void ensureUiReady() {
 		return;
 	}
 	fontsRequested = true;
-	registerCjkGlyphSeed(getAddonFolder());
 	loadFonts();
 }
 
@@ -983,7 +838,6 @@ void pumpFontReload() {
 	}
 	fontReload.cancel();
 	fontReloadRequestedAt.reset();
-	registerCjkGlyphSeed(getAddonFolder());
 	loadFonts();
 }
 
@@ -992,12 +846,6 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_GENERIC_WIDGET", ReceiveFont);
-	APIDefs->Fonts.Release("ROT_FONT_CJK_OPTIONS", ReceiveFont);
-	APIDefs->Fonts.Release("ROT_FONT_CJK_SMALL", ReceiveFont);
-	APIDefs->Fonts.Release("ROT_FONT_CJK_LARGE", ReceiveFont);
-	APIDefs->Fonts.Release("ROT_FONT_CJK_WIDGET", ReceiveFont);
-	APIDefs->Fonts.Release("ROT_FONT_CJK_ANIM_SMALL", ReceiveFont);
-	APIDefs->Fonts.Release("ROT_FONT_CJK_ANIM_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_LARGE", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_ASURA_WIDGET", ReceiveFont);
@@ -1027,9 +875,6 @@ void releaseFonts() {
 	APIDefs->Fonts.Release("ROT_FONT_SYLVARI_ANIM_SMALL", ReceiveFont);
 	APIDefs->Fonts.Release("ROT_FONT_SYLVARI_ANIM_LARGE", ReceiveFont);
 
-	optionsCjkFont = nullptr;
-	cjkGlyphSeedRegistered = false;
-	cjkGlyphRanges.clear();
 	renderer.clearFonts();
 	APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "Font unload queued successfully.");
 }

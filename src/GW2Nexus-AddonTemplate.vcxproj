@@ -129,6 +129,7 @@
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -170,6 +171,7 @@
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -184,6 +186,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Constants.h" />
+    <ClInclude Include="FontFallback.h" />
+    <ClInclude Include="MapGlyphAtlas.h" />
+    <ClInclude Include="MapFontPreparation.h" />
+    <ClInclude Include="MapCache.h" />
+    <ClInclude Include="service\MapFontService.h" />
     <ClInclude Include="entity\GW2API_Continents.h" />
     <ClInclude Include="entity\GW2API_Worlds.h" />
     <ClInclude Include="entity\GW2API_WvW.h" />
@@ -211,6 +218,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="entry.cpp" />
+    <ClCompile Include="MapGlyphAtlas.cpp" />
+    <ClCompile Include="service\MapFontService.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_demo.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />

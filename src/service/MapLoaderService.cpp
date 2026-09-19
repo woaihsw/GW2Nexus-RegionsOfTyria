@@ -5,6 +5,7 @@
 
 #include "../ziplib/src/zip.h"
 #include "HttpClient.h"
+#include "MapFontService.h"
 
 int timeoutCounter = 0;
 int retryCounter = 0;
@@ -27,6 +28,8 @@ void MapLoaderService::reset() {
 	pendingLocales.clear();
 	pendingMaps.clear();
 	failedMaps.clear();
+	fontPreparation.clear();
+	cachedMaps.clear();
 }
 
 void MapLoaderService::startWorker() {
@@ -90,6 +93,7 @@ void MapLoaderService::unload() {
 		queueCv.notify_all();
 		worker.join();
 	}
+	fontPreparation.clear();
 }
 
 /// <summary>
@@ -123,7 +127,51 @@ std::string MapLoaderService::performRequest(std::string uri) {
 }
 
 void MapLoaderService::initializeMapStorage() {
+	// Before starting the worker: fold cached map names into the first atlas.
+	for (const auto& locale : SUPPORTED_LOCAL) {
+		try {
+			auto& maps = cachedMaps[locale];
+			maps = readMapCache(fs::path(getAddonFolder()) / ("api_maps_" + locale + ".json"));
+			for (const auto& [id, map] : maps) mapFonts.addText(mapNameText(map));
+		}
+		catch (const std::exception& error) {
+			APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Ignoring invalid API map cache: " + std::string(error.what())).c_str());
+		}
+	}
 	startWorker();
+}
+
+void MapLoaderService::cacheMap(const std::string& locale, const gw2::map& map) {
+	try {
+		auto& maps = cachedMaps[locale];
+		maps[map.id] = map;
+		const fs::path path = fs::path(getAddonFolder()) / ("api_maps_" + locale + ".json");
+		const fs::path temporary = path.wstring() + L".tmp";
+		writeMapCacheTemporary(temporary, maps);
+		if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			throw std::runtime_error("Could not replace API map cache");
+	}
+	catch (const std::exception& error) {
+		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Could not save API map cache: " + std::string(error.what())).c_str());
+	}
+}
+
+void MapLoaderService::publishPreparedMaps() {
+	fontPreparation.advance(
+		[](const std::string& text) { mapFonts.addText(text); },
+		[] { return mapFonts.prepare(); },
+		[this](MapFontPreparation::Batch batch) {
+			std::lock_guard<std::mutex> lock(requestMutex);
+			for (auto& map : batch.maps) {
+				const std::string key = batch.locale + ":" + std::to_string(map.id);
+				mapInventory->addMap(batch.locale, std::move(map));
+				pendingMaps.erase(key);
+			}
+			if (batch.completesLocale) {
+				mapInventory->markLocaleLoaded(batch.locale);
+				pendingLocales.erase(batch.locale);
+			}
+		});
 }
 
 void MapLoaderService::ensureLocaleLoaded(std::string locale) {
@@ -138,8 +186,6 @@ void MapLoaderService::ensureLocaleLoaded(std::string locale) {
 
 	enqueueJob([this, locale] {
 		loadMapsFromStorage(locale);
-		std::lock_guard<std::mutex> lock(requestMutex);
-		pendingLocales.erase(locale);
 	});
 }
 
@@ -162,11 +208,11 @@ void MapLoaderService::requestMapFromAPI(std::string locale, int mapId) {
 	enqueueJob([this, locale, mapId, requestKey] {
 		bool loaded = loadMapFromAPI(locale, mapId);
 		std::lock_guard<std::mutex> lock(requestMutex);
-		pendingMaps.erase(requestKey);
 		if (loaded) {
 			failedMaps.erase(requestKey);
 			return;
 		}
+		pendingMaps.erase(requestKey);
 
 		MapLoadRetryState& state = failedMaps[requestKey];
 		state.failureCount++;
@@ -320,71 +366,29 @@ void MapLoaderService::loadAllMapsFromStorage() {
 }
 
 void MapLoaderService::loadMapsFromStorage(std::string lang) {
+	if (unloading.load() || mapInventory->isLocaleLoaded(lang)) return;
+	MapFontPreparation::Batch batch{lang, {}, true};
+	std::set<int> bundledIds;
 	try {
-		// Get addon directory
-		std::string pathFolder = APIDefs->Paths.GetAddonDirectory(ADDON_NAME);
-		// Create folder if not exist
-		if (!fs::exists(pathFolder)) {
-			try {
-				fs::create_directory(pathFolder);
-			}
-			catch (const std::exception& e) {
-				std::string message = "Could not create addon directory: ";
-				message.append(pathFolder);
-				APIDefs->Log(ELogLevel::ELogLevel_CRITICAL, ADDON_NAME, message.c_str());
-
-				// Suppress the warning for the unused variable 'e'
-				#pragma warning(suppress: 4101)
-				e;
-			}
-		}
-
-		if (unloading.load() || mapInventory->isLocaleLoaded(lang)) return;
-
-		std::string pathData = pathFolder + "/" + lang + ".json";
-		if (fs::exists(pathData)) {
-			std::ifstream dataFile(pathData);
-
-			if (!dataFile.is_open()) {
-				APIDefs->Log(ELogLevel::ELogLevel_WARNING, ADDON_NAME, ("Could not open maps file for language: " + lang + ".json").c_str());
-				mapInventory->markLocaleLoaded(lang);
-				return;
-			}
-
-			json jsonData;
-			dataFile >> jsonData;
-			dataFile.close();
-
-			gw2::region region = jsonData;
-
-			for (auto map : region.maps)
-			{
+		std::ifstream dataFile(fs::path(getAddonFolder()) / (lang + ".json"));
+		if (dataFile) {
+			const auto document = json::parse(dataFile);
+			auto region = document.get<gw2::region>();
+			for (auto& [id, map] : region.maps) {
 				if (unloading.load()) return;
-				mapInventory->addMap(lang, map.second);
+				bundledIds.insert(map.id);
+				batch.maps.push_back(std::move(map));
 			}
-			mapInventory->markLocaleLoaded(lang);
 		}
-		else {
-			APIDefs->Log(ELogLevel::ELogLevel_WARNING, ADDON_NAME, ("Maps file for language not found: " + lang + ".json").c_str());
-			mapInventory->markLocaleLoaded(lang);
-			return;
-		}
-
-		if (unloading.load()) return;
-		std::stringstream stream;
-		stream << "Maps for locale '" << lang << "' in inventory: " << std::to_string(mapInventory->getLoadedMaps(lang).size());
-		APIDefs->Log(ELogLevel::ELogLevel_INFO, ADDON_NAME, stream.str().c_str());
 	}
-
-	catch (const std::exception& e) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Exception in map initialization thread.");
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, e.what());
-		mapInventory->markLocaleLoaded(lang);
+	catch (const std::exception& error) {
+		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Could not read bundled maps: " + std::string(error.what())).c_str());
 	}
-	catch (...) {
-		APIDefs->Log(ELogLevel_CRITICAL, ADDON_NAME, "Unknown exception in map initialization thread.");
-		mapInventory->markLocaleLoaded(lang);
+	// An updated bundled map takes precedence over an older API cache entry.
+	for (const auto& [id, map] : cachedMaps[lang]) {
+		if (!bundledIds.contains(id)) batch.maps.push_back(map);
 	}
+	if (!unloading.load()) fontPreparation.submit(std::move(batch));
 }
 
 bool MapLoaderService::loadMapFromAPI(std::string lang, int mapId) {
@@ -457,8 +461,9 @@ bool MapLoaderService::loadMapFromAPI(std::string lang, int mapId) {
 		}
 
 		addDefaultSector(mapInfo);
-		mapInventory->addMap(lang, mapInfo);
-		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Loaded missing map " + std::to_string(mapInfo.id) + " for locale '" + lang + "' from GW2 API.").c_str());
+		cacheMap(lang, mapInfo);
+		fontPreparation.submit({lang, {std::move(mapInfo)}, false});
+		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, ("Queued missing map " + std::to_string(mapId) + " for locale '" + lang + "' for font preparation.").c_str());
 		return true;
 	}
 	catch (const std::exception& e) {

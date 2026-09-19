@@ -13,6 +13,8 @@
 
 #include "../Globals.h"
 #include "../MapRetry.h"
+#include "../MapFontPreparation.h"
+#include "../MapCache.h"
 #include "../entity/GW2API_Continents.h"
 #include "../entity/GW2API_Worlds.h"
 #include "../entity/GW2API_WvW.h"
@@ -28,6 +30,7 @@ public:
 	void requestMapFromAPI(std::string locale, int mapId);
 	void loadWvWMatchFromAPI();
 	void unload();
+	void publishPreparedMaps();
 
 private:
 	void startWorker();
@@ -42,6 +45,9 @@ private:
 	void unpackMaps();
 	void loadWorldsFromAPI();
 	void loadAlliancesFromStorage();
+	void cacheMap(const std::string& locale, const gw2::map& map);
+	MapFontPreparation fontPreparation;
+	std::map<std::string, CachedMaps> cachedMaps;
 
 	std::mutex requestMutex;
 	std::set<std::string> pendingLocales;

@@ -1,4 +1,6 @@
 #include "AddonRenderer.h"
+#include "../FontFallback.h"
+#include "MapFontService.h"
 #include <fstream>
 
 #include "AddonInitalize.h"
@@ -7,10 +9,11 @@ using json = nlohmann::json;
 
 std::string replacePlaceholderTexts(std::string text, bool useSampleText);
 
-static void TextColoredUnformatted(const ImVec4& color, const char* text) {
-	ImGui::PushStyleColor(ImGuiCol_Text, color);
-	ImGui::TextUnformatted(text);
-	ImGui::PopStyleColor();
+static FallbackTextFont makeTextFont(ImFont* preferred, ImFont* alternate, ImFont* nexusFont) {
+	const float size = preferred != nullptr ? preferred->FontSize : ImGui::GetFontSize();
+	return { preferred, alternate, nexusFont, ImGui::GetIO().FontDefault,
+		size * ImGui::GetIO().FontGlobalScale,
+		[](float size, bool animation, ImWchar c) { return mapFonts.find(size, animation, c); } };
 }
 
 std::optional<std::chrono::steady_clock::time_point> popupAnimationStart;
@@ -26,68 +29,6 @@ bool fontsPicked;
 
 bool fontsLoaded = false;
 int expectedFontCount = 30;
-
-static ImWchar decodeUtf8Character(const char* text, int& charLength) {
-	charLength = 1;
-	unsigned char c = static_cast<unsigned char>(*text);
-
-	if (c < 0x80) {
-		return c;
-	}
-
-	auto isContinuation = [](const char* p) {
-		return *p != '\0' && (static_cast<unsigned char>(*p) & 0xC0) == 0x80;
-	};
-
-	if ((c & 0xE0) == 0xC0 && isContinuation(text + 1)) {
-		charLength = 2;
-		ImWchar character = static_cast<ImWchar>((c & 0x1F) << 6);
-		character |= static_cast<unsigned char>(text[1]) & 0x3F;
-		return character;
-	}
-
-	if ((c & 0xF0) == 0xE0 && isContinuation(text + 1) && isContinuation(text + 2)) {
-		charLength = 3;
-		ImWchar character = static_cast<ImWchar>((c & 0x0F) << 12);
-		character |= (static_cast<unsigned char>(text[1]) & 0x3F) << 6;
-		character |= static_cast<unsigned char>(text[2]) & 0x3F;
-		return character;
-	}
-
-	if ((c & 0xF8) == 0xF0 && isContinuation(text + 1) && isContinuation(text + 2) && isContinuation(text + 3)) {
-		charLength = 4;
-		ImWchar character = static_cast<ImWchar>((c & 0x07) << 18);
-		character |= (static_cast<unsigned char>(text[1]) & 0x3F) << 12;
-		character |= (static_cast<unsigned char>(text[2]) & 0x3F) << 6;
-		character |= static_cast<unsigned char>(text[3]) & 0x3F;
-		return character;
-	}
-
-	return c;
-}
-
-static bool fontCanRenderText(ImFont* font, const char* text) {
-	if (font == nullptr || !font->IsLoaded()) return false;
-
-	for (const char* p = text; *p;) {
-		int charLength = 1;
-		ImWchar character = decodeUtf8Character(p, charLength);
-		if (font->FindGlyphNoFallback(character) == nullptr) {
-			return false;
-		}
-		p += charLength;
-	}
-
-	return true;
-}
-
-static bool isCoreFont(const std::string& name) {
-	return name != fontNameCjkSmall &&
-		name != fontNameCjkLarge &&
-		name != fontNameCjkWidget &&
-		name != fontNameCjkAnimSmall &&
-		name != fontNameCjkAnimLarge;
-}
 
 Renderer::Renderer() {}
 Renderer::~Renderer() {}
@@ -123,6 +64,7 @@ void Renderer::clearFonts() {
 	fontSmall = nullptr;
 	fontAnimLarge = nullptr;
 	fontAnimSmall = nullptr;
+	fontWidget = nullptr;
 
 	// clear the fonts map
 	fonts.clear();
@@ -142,63 +84,11 @@ void Renderer::registerFont(std::string name, ImFont* font) {
 		fonts.emplace(name, font);
 	}
 
-	int coreFontCount = 0;
-	for (const auto& font : fonts) {
-		if (isCoreFont(font.first)) {
-			coreFontCount++;
-		}
-	}
-
-	bool allCoreFontsLoaded = coreFontCount >= expectedFontCount;
+	bool allCoreFontsLoaded = fonts.size() >= static_cast<size_t>(expectedFontCount);
 	if (allCoreFontsLoaded && !fontsLoaded) {
 		APIDefs->Log(ELogLevel_INFO, ADDON_NAME, "All fonts loaded and registered with the renderer.");
 	}
 	fontsLoaded = allCoreFontsLoaded;
-}
-
-ImFont* Renderer::getLoadedFont(const std::string& name) {
-	if (!fonts.contains(name)) return nullptr;
-	ImFont* font = fonts[name];
-	if (font == nullptr || !font->IsLoaded()) return nullptr;
-	return font;
-}
-
-ImFont* Renderer::getRenderableFontForText(ImFont* preferred, ImFont* fallback, const char* text) {
-	if (fontCanRenderText(preferred, text)) return preferred;
-	if (fontCanRenderText(fallback, text)) return fallback;
-	return preferred != nullptr ? preferred : fallback;
-}
-
-ImFont* Renderer::getRenderableFontForCharacter(ImFont* preferred, ImFont* fallback, ImWchar character) {
-	if (preferred != nullptr && preferred->IsLoaded() && preferred->FindGlyphNoFallback(character) != nullptr) {
-		return preferred;
-	}
-	if (fallback != nullptr && fallback->IsLoaded() && fallback->FindGlyphNoFallback(character) != nullptr) {
-		return fallback;
-	}
-	return preferred != nullptr ? preferred : fallback;
-}
-
-float Renderer::calculateRenderedTextWidth(ImFont* preferred, ImFont* fallback, const char* text) {
-	if (text == nullptr) return 0.0f;
-
-	float width = 0.0f;
-	float scaling = NexusLink != nullptr && NexusLink->Scaling > 0.0f ? NexusLink->Scaling : 1.0f;
-	for (const char* p = text; *p;) {
-		int charLength = 1;
-		ImWchar character = decodeUtf8Character(p, charLength);
-		ImFont* renderFont = getRenderableFontForCharacter(preferred, fallback, character);
-
-		if (renderFont != nullptr) {
-			ImGui::PushFont(renderFont);
-			width += ImGui::CalcTextSize(p, p + charLength).x * scaling;
-			ImGui::PopFont();
-		}
-
-		p += charLength;
-	}
-
-	return width;
 }
 
 void Renderer::updateFontSettings() {
@@ -318,7 +208,7 @@ void Renderer::postRender(ImGuiIO& io) {
 }
 
 void Renderer::render() {
-	if (unloading.load()) return;
+	if (unloading.load() || !mapFonts.ready() || !fontsLoaded) return;
 	try {
 		renderSampleInfo();
 		renderSectorInfo();
@@ -418,15 +308,12 @@ void Renderer::renderMinimapWidget() {
 
 	std::string output = fontSettings->widgetDisplayFormat;
 	output = replacePlaceholderTexts(output, false);
-	ImFont* renderFontWidget = getRenderableFontForText(fontWidget, getLoadedFont(fontNameCjkWidget), output.c_str());
-	if (renderFontWidget == nullptr) {
-		renderFontWidget = fontWidget;
-	}
-
-	// calculate text size
-	ImGui::PushFont(renderFontWidget);
-	ImVec2 textSize = ImGui::CalcTextSize(output.c_str());
-	ImGui::PopFont();
+	const FallbackTextFont widgetFont = makeTextFont(fontWidget, nullptr, (ImFont*)NexusLink->FontUI);
+	const ImVec2 textSize = widgetFont.measure(output.c_str());
+	auto drawWidgetText = [&](const ImVec4& color) {
+		widgetFont.draw(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(),
+			ImGui::GetColorU32(color), output.c_str());
+	};
 	ImVec4 textColor = ImVec4(fontSettings->widgetFontColor[0], fontSettings->widgetFontColor[1], fontSettings->widgetFontColor[2], 1.0f);
 	ImVec4 shadowColor = ImVec4(fontSettings->fontBorderColor[0], fontSettings->fontBorderColor[1], fontSettings->fontBorderColor[2], 1);
 
@@ -437,7 +324,6 @@ void Renderer::renderMinimapWidget() {
 	ImGui::SetNextWindowBgAlpha(settings.widgetBackgroundOpacity);
 
 	if (ImGui::Begin("MiniSectorWidget", (bool*)0, flags)) {
-		ImGui::PushFont(renderFontWidget);
 		// alignment left - center - right
 		float textX;
 		switch (settings.widgetTextAlign) {
@@ -453,7 +339,7 @@ void Renderer::renderMinimapWidget() {
 		case 1: // shadow
 			ImGui::SetCursorPosX(textX + fontSettings->fontBorderOffset);
 			ImGui::SetCursorPosY(1.0f);
-			TextColoredUnformatted(shadowColor, output.c_str());
+			drawWidgetText(shadowColor);
 			break;
 		case 2: // full border
 			ImGui::SetCursorPosX(textX - fontSettings->fontBorderOffset);
@@ -465,7 +351,7 @@ void Renderer::renderMinimapWidget() {
 				for (int y = 0; y <= fontSettings->fontBorderOffset * 2; y++)
 				{
 					ImGui::SetCursorPos({ currentPos.x + static_cast<float>(x), currentPos.y + static_cast<float>(y) });
-					TextColoredUnformatted(shadowColor, output.c_str());
+					drawWidgetText(shadowColor);
 				}
 			}	
 			break;
@@ -473,8 +359,7 @@ void Renderer::renderMinimapWidget() {
 		
 		ImGui::SetCursorPosX(textX);
 		ImGui::SetCursorPosY(0.0f);
-		TextColoredUnformatted(textColor, output.c_str());
-		ImGui::PopFont();
+		drawWidgetText(textColor);
 	}
 	ImGui::End();
 }
@@ -752,102 +637,46 @@ void Renderer::renderDebugInfo() {
 void Renderer::renderTextAnimation(const char* text, float opacityOverride, bool large, bool isShadow) {
 	ImFont* main = large ? fontLarge : fontSmall;
 	ImFont* secondary = large ? fontAnimLarge : fontAnimSmall;
-
-	if (settings.disableAnimations) {
-		secondary = main; // :(
-	}
-
-	ImVec4 color = ImVec4(fontSettings->fontColor[0], fontSettings->fontColor[1], fontSettings->fontColor[2], opacityOverride);
-	ImVec4 shadow = ImVec4(fontSettings->fontBorderColor[0], fontSettings->fontBorderColor[1], fontSettings->fontBorderColor[2], opacityOverride);
-
-	ImVec2 originalCursorPos = ImGui::GetCursorPos();
-
-	float font1Size = main->FontSize;
-	float font2Size = secondary->FontSize;
-
-	// Calculate the offset to align secondary to the center of main
-	float yOffset = (font1Size - font2Size) * 0.5f;
-	float currentX = originalCursorPos.x;
-
-	// Calculate the scaling factor for font2
-	float scalingFactor = font1Size / font2Size;
-	if (scalingFactor == 0.0f) scalingFactor = 1.0f;
-
-	float originalSecondaryScaling = secondary->Scale;
-	secondary->Scale = scalingFactor;
-
-	const char* p = text;
-	mbstate_t state = mbstate_t(); // Initialize the conversion state
+	ImFont* nexusFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
+	const FallbackTextFont mainFonts = makeTextFont(main, nullptr, nexusFont);
+	const ImVec4 color = isShadow
+		? ImVec4(fontSettings->fontBorderColor[0], fontSettings->fontBorderColor[1], fontSettings->fontBorderColor[2], opacityOverride)
+		: ImVec4(fontSettings->fontColor[0], fontSettings->fontColor[1], fontSettings->fontColor[2], opacityOverride);
+	const ImU32 packedColor = ImGui::GetColorU32(color);
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImVec2 position = ImGui::GetCursorScreenPos();
+	const float startX = position.x;
 
 	for (const char* p = text; *p;) {
-		int char_len = 1;
-		ImWchar character = decodeUtf8Character(p, char_len);
-
-		// Pick font based on opacity; lower opacity more favorably to secondary.
-		bool useSecondary = !settings.disableAnimations && opacityOverride < 1.0f && ((float)rand() / RAND_MAX) > opacityOverride;
-		ImFont* selectedFont = useSecondary ? secondary : main;
-		ImFont* fallbackFont = getLoadedFont(large ? fontNameCjkLarge : fontNameCjkSmall);
-		ImFont* fallbackAnimFont = getLoadedFont(large ? fontNameCjkAnimLarge : fontNameCjkAnimSmall);
-		if (fallbackAnimFont == nullptr) {
-			fallbackAnimFont = fallbackFont;
+		int length = 0;
+		const ImWchar character = FallbackTextFont::decode(p, length);
+		if (character == '\n') {
+			position.x = startX;
+			position.y += mainFonts.size;
 		}
-		ImFont* selectedFallbackFont = useSecondary ? fallbackAnimFont : fallbackFont;
-		if (selectedFallbackFont == nullptr) {
-			selectedFallbackFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
-		}
-		selectedFont = getRenderableFontForCharacter(selectedFont, selectedFallbackFont, character);
-		
-		// Align height to center with main font
-		ImGui::PushFont(selectedFont);
-		if (selectedFont == secondary) {
-			ImVec2 charPos = ImGui::GetCursorPos();
-			ImGui::SetCursorPos(ImVec2(charPos.x, charPos.y + yOffset));
-		}
-
-		ImGui::PushStyleColor(ImGuiCol_Text, isShadow? shadow : color);
-		ImGui::TextUnformatted(p, p + char_len);
-		
-		// draw outline
-		if (isShadow && fontSettings->fontBorderMode == 2) {
-			ImVec2 currentPos = ImGui::GetCursorPos();
-			for (int x = 0; x <= fontSettings->fontBorderOffset * 2; x++)
-			{
-				for (int y = 0; y <= fontSettings->fontBorderOffset * 2; y++)
-				{
-					ImGui::SetCursorPos({ currentX + static_cast<float>(x), originalCursorPos.y + static_cast<float>(y) });
-					ImGui::TextUnformatted(p, p + char_len);
+		else if (character != '\r') {
+			FallbackTextFont drawFonts = mainFonts;
+			const bool useSecondary = !settings.disableAnimations && opacityOverride < 1.0f
+				&& (static_cast<float>(rand()) / RAND_MAX) > opacityOverride;
+			if (useSecondary) {
+				drawFonts.preferred = secondary;
+				drawFonts.alternate = main;
+				drawFonts.animation = true;
+			}
+			drawFonts.drawGlyph(drawList, position, packedColor, character, p, p + length);
+			if (isShadow && fontSettings->fontBorderMode == 2) {
+				for (int x = 0; x <= fontSettings->fontBorderOffset * 2; ++x) {
+					for (int y = 0; y <= fontSettings->fontBorderOffset * 2; ++y) {
+						drawFonts.drawGlyph(drawList, ImVec2(position.x + x, position.y + y),
+							packedColor, character, p, p + length);
+					}
 				}
 			}
-
-			ImGui::SetCursorPos(currentPos);
+			// Animation uses the stable primary-font advances to keep the text centered.
+			position.x += mainFonts.advance(character);
 		}
-		
-		ImGui::PopStyleColor();
-
-		// reset position
-		if (selectedFont == secondary) {
-			ImVec2 charPos = ImGui::GetCursorPos();
-			ImGui::SetCursorPos(ImVec2(charPos.x, charPos.y - yOffset));
-
-		}
-
-		ImGui::PopFont();
-		
-		if (p[char_len]) {	
-			if (fallbackFont == nullptr) {
-				fallbackFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
-			}
-			ImFont* advanceFont = getRenderableFontForCharacter(main, fallbackFont, character);
-			ImGui::PushFont(advanceFont);
-			currentX += ImGui::CalcTextSize(p, p + char_len).x * NexusLink->Scaling;
-
-			ImGui::PopFont();
-			ImGui::SetCursorPos(ImVec2(currentX, originalCursorPos.y));
-		}
-
-		p += char_len;
+		p += length;
 	}
-	secondary->Scale = originalSecondaryScaling;
 }
 
 void Renderer::centerText(std::string text, float textY, float opacityOverride) {
@@ -861,11 +690,8 @@ void Renderer::centerText(std::string text, float textY, float opacityOverride) 
 		text = "The Unknown";
 	}
 
-	ImFont* fallbackFont = getLoadedFont(fontNameCjkLarge);
-	if (fallbackFont == nullptr) {
-		fallbackFont = (ImFont*)NexusLink->FontBig;
-	}
-	float textX = (windowSize.x - calculateRenderedTextWidth(fontLarge, fallbackFont, text.c_str())) / 2.0f;
+	const FallbackTextFont textFont = makeTextFont(fontLarge, nullptr, (ImFont*)NexusLink->FontBig);
+	float textX = (windowSize.x - textFont.measure(text.c_str()).x) / 2.0f;
 
 	int offset = fontSettings->fontBorderOffset;
 	if (fontSettings->fontBorderMode == 0) {
@@ -886,11 +712,8 @@ void Renderer::centerTextSmall(std::string text, float textY, float opacityOverr
 	ImGuiIO& io = ImGui::GetIO();
 	ImVec2 windowSize = io.DisplaySize;
 
-	ImFont* fallbackFont = getLoadedFont(fontNameCjkSmall);
-	if (fallbackFont == nullptr) {
-		fallbackFont = (ImFont*)NexusLink->Font;
-	}
-	float textX = (windowSize.x - calculateRenderedTextWidth(fontSmall, fallbackFont, text.c_str())) / 2.0f;
+	const FallbackTextFont textFont = makeTextFont(fontSmall, nullptr, (ImFont*)NexusLink->Font);
+	float textX = (windowSize.x - textFont.measure(text.c_str()).x) / 2.0f;
 
 	int offset = fontSettings->fontBorderOffset;
 	if (fontSettings->fontBorderMode == 0) {
