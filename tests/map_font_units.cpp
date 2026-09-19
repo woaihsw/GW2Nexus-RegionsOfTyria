@@ -212,6 +212,19 @@ int main(int argc, char** argv) {
 	const int hostWidth = io.Fonts->TexWidth, hostHeight = io.Fonts->TexHeight;
 	const int hostGlyphs = hostFont->Glyphs.Size;
 	{
+		const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures/single_point.ttf";
+		std::ifstream file(fixture, std::ios::binary);
+		auto data = std::make_shared<std::vector<unsigned char>>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+		MapGlyphAtlas degenerate;
+		degenerate.setSources({data});
+		check(!data->empty() && degenerate.addText("\xEE\x80\x81"), "single-point contour fixture has an actual cmap entry");
+		check(prepareAtlas(degenerate, {{72, false}}, [](const unsigned char*, int, int) -> MapGlyphAtlas::Texture {
+			return {new int(1), [](void* p) { delete static_cast<int*>(p); }};
+		}), "single off-curve point rasterizes without reading a nonexistent next point");
+		ImFont* font = degenerate.find(72, false, 0xE001);
+		check(font && font->GetCharAdvance(0xE001) > 0, "degenerate contour retains its spacing advance");
+	}
+	{
 		MapGlyphAtlas atlas;
 		atlas.setSources({source, secondary});
 		atlas.addText("预内室 泰瑞亚 卡斯特拉 魔泉空洞");

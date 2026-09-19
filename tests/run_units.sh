@@ -22,11 +22,15 @@ from pathlib import Path
 with zipfile.ZipFile(sys.argv[1]) as archive:
     Path(sys.argv[2]).write_bytes(archive.read('cjk_seed.txt'))
 PY
-g++ -std=c++20 -O2 -pthread -Wall -Wextra \
+font_flags=(-O2)
+if [[ "${ROT_TEST_SANITIZERS:-0}" == 1 ]]; then
+  font_flags=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+fi
+g++ -std=c++20 "${font_flags[@]}" -pthread -Wall -Wextra \
   -I "$root/src" -I "$root/tests/third_party" \
   "$root/tests/map_font_units.cpp" "$root/src/MapGlyphAtlas.cpp" \
   "$root/src/service/MapInventory.cpp" "$root/src/service/MapFontService.cpp" \
-  "$root/src/imgui/imgui.cpp" "$root/src/imgui/imgui_draw.cpp" \
+  "$root/src/imgui/imgui.cpp" "$root/src/ImGuiFontBuild.cpp" \
   "$root/src/imgui/imgui_tables.cpp" "$root/src/imgui/imgui_widgets.cpp" \
   -o "$font_test_dir/map_font_units"
 "$font_test_dir/map_font_units" "$font" "$font_test_dir/seed.txt" "$latin_font" "${ROT_TEST_CJK_SECONDARY_FONT:-$font}"

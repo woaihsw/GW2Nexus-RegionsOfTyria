@@ -1,7 +1,7 @@
 #pragma once
 
 #include "imgui/imgui.h"
-#include "imgui/imstb_truetype.h"
+#include "vendor/stb_truetype.h"
 
 #include <functional>
 #include <cstdint>

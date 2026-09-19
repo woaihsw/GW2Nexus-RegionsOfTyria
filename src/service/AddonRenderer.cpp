@@ -49,6 +49,12 @@ bool Renderer::hostGlyphAvailable(float size, bool animation, ImWchar character)
 		auto candidate = common;
 		candidate.preferred = font;
 		candidate.nexus = nexus;
+		if (animation) {
+			std::string primaryName = name;
+			primaryName.erase(primaryName.find("Anim"), 4);
+			const auto primary = fonts.find(primaryName);
+			if (primary != fonts.end()) candidate.alternate = primary->second;
+		}
 		if (!candidate.hostGlyph(character)) return false;
 		found = true;
 	}

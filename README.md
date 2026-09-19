@@ -57,6 +57,8 @@ Reloading fonts from options applies replacements. Resetting fonts overwrites th
 
 For local CPU tests, install `fonts-droid-fallback` and `fonts-dejavu-core` (or set `ROT_TEST_CJK_FONT`, `ROT_TEST_CJK_SECONDARY_FONT` and `ROT_TEST_LATIN_FONT`) and run `tests/run_units.sh`. DejaVu is a host fallback, never a private CJK source. Set `ROT_TEST_MS_FONT_DIR` to a local directory containing `msyh.ttc` and `simsun.ttc` to also run with the production source pair. Tests exercise the actual font service, failure isolation, upload retry, cache precedence/restart, profile replacement, frame budgets and drawing across textures. Windows DLL compilation and an in-game DX11 check are separate from these CPU tests.
 
+CI sets `ROT_TEST_SANITIZERS=1` to run the font tests with AddressSanitizer and UndefinedBehaviorSanitizer. A minimal generated font covers the single-point contour that caused an out-of-bounds read in ImGui 1.80's stb parser with SimSun. The addon uses a locally patched copy of that parser while keeping the Nexus ImGui ABI unchanged; see `src/vendor/README.md`.
+
 ## Regenerating map data
 
 Packed locale files (`en.json`, `de.json`, `es.json`, `fr.json`, `zh.json`) and `cjk_seed.txt` are built from the live continents API:
