@@ -18,6 +18,7 @@ public:
 		Clock::time_point now = Clock::now(), size_t pageBudget = 1);
 	bool textReady(const std::string& text) const;
 	ImFont* find(float size, bool animation, ImWchar character) const;
+	bool hasAnimationFace() const { return atlas.sourceCount() > 1; }
 	bool ready() const { return prepared; }
 	void clear();
 	size_t pageCount() const { return atlas.pageCount(); }
@@ -34,7 +35,6 @@ private:
 	uint64_t lastHostRevision = 0;
 	bool dirty = true;
 	bool configured = false;
-	bool hasAnimationFace = false;
 	bool prepared = false;
 	Clock::time_point retryAt{};
 };

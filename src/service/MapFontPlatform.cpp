@@ -62,7 +62,7 @@ bool MapFontService::prepare() {
 	for (const auto& font : settings.fontSettings) {
 		for (float size : {font.smallFontSize, font.largeFontSize, font.widgetFontSize})
 			profiles.insert({(size > 0 ? size : 10) * scale, false});
-		if (!settings.disableAnimations && hasAnimationFace) {
+		if (!settings.disableAnimations && hasAnimationFace()) {
 			for (float size : {font.smallFontSize, font.largeFontSize})
 				profiles.insert({(size > 0 ? size : 10) * scale, true});
 		}

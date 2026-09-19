@@ -3,7 +3,6 @@
 
 void MapFontService::setSources(std::vector<MapGlyphAtlas::FontData> sources) {
 	clear();
-	hasAnimationFace = sources.size() > 1;
 	atlas.setSources(std::move(sources));
 }
 
@@ -57,7 +56,7 @@ bool MapFontService::textReady(const std::string& text) const {
 }
 
 ImFont* MapFontService::find(float size, bool animation, ImWchar character) const {
-	animation = animation && hasAnimationFace;
+	animation = animation && hasAnimationFace();
 	if (ImFont* font = atlas.find(size, animation, character)) return font;
 	if (ImFont* font = atlas.findPrevious(size, animation, character)) return font;
 	if (ImFont* font = atlas.find(size, false, character)) return font;
@@ -74,6 +73,6 @@ void MapFontService::clear() {
 	hostCoverage = {};
 	lastHostRevision = 0;
 	dirty = true;
-	configured = hasAnimationFace = prepared = false;
+	configured = prepared = false;
 	retryAt = {};
 }

@@ -24,6 +24,40 @@ static bool prepareAtlas(MapGlyphAtlas& atlas, const std::set<MapGlyphAtlas::Pro
 	return atlas.prepare(profiles, upload) == MapGlyphAtlas::Preparation::Ready;
 }
 
+static void testFontSourceValidation(const MapGlyphAtlas::FontData& source, const MapGlyphAtlas::FontData& secondary) {
+	// Recognizable sfnt header, but no tables: InitFont must reject this face.
+	auto invalid = std::make_shared<std::vector<unsigned char>>(12, 0);
+	(*invalid)[1] = 1;
+	MapFontService service;
+	int uploads = 0;
+	auto prepare = [&] {
+		service.addText("兆");
+		std::set<MapGlyphAtlas::Profile> profiles{{72, false}};
+		if (service.hasAnimationFace()) profiles.insert({72, true});
+		return service.prepare(profiles, "", {}, 0,
+			[&](const unsigned char*, int, int) -> MapGlyphAtlas::Texture {
+				++uploads;
+				return {new int(uploads), [](void* p) { delete static_cast<int*>(p); }};
+			}, MapFontService::Clock::now(), SIZE_MAX);
+	};
+	service.setSources({source, invalid});
+	check(prepare() && service.textReady("兆") && uploads == 1 && service.pageCount() == 1
+		&& service.find(72, true, 0x5146) == service.find(72, false, 0x5146),
+		"invalid second face uses one page for both normal and animated text");
+	service.setSources({invalid, secondary});
+	uploads = 0;
+	check(prepare() && service.textReady("兆") && uploads == 1,
+		"valid remaining face renders after the first source is rejected");
+	service.setSources({source, secondary});
+	uploads = 0;
+	check(prepare() && service.textReady("兆") && uploads == 2
+		&& service.find(72, true, 0x5146) != service.find(72, false, 0x5146),
+		"two valid faces retain separate normal and animation pages");
+	service.clear();
+	check(!service.hasAnimationFace() && service.pageCount() == 0,
+		"clearing fonts removes animation availability and private pages");
+}
+
 static void testFailureIsolation(const MapGlyphAtlas::FontData& source, const MapGlyphAtlas::FontData& secondary, const MapGlyphAtlas::FontData& latin) {
 	ImFontAtlas hostAtlas;
 	ImFontConfig config;
@@ -379,6 +413,7 @@ int main(int argc, char** argv) {
 			<< " RGBA_bytes=" << service.textureBytes() << " CPU_ms=" << ms << '\n';
 	}
 
+	testFontSourceValidation(source, secondary);
 	testFailureIsolation(source, secondary, latin);
 	ImGui::DestroyContext();
 	std::cout << "Map font tests: " << passes << " passed, " << failures << " failed\n";

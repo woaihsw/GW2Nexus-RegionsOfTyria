@@ -36,6 +36,7 @@ public:
 	ImFont* find(float size, bool animation, ImWchar character) const;
 	ImFont* findPrevious(float size, bool animation, ImWchar character) const;
 	void clear();
+	size_t sourceCount() const { return sources.size(); }
 	size_t pageCount() const;
 	size_t textureBytes() const;
 	size_t buildCount() const { return builds; }
