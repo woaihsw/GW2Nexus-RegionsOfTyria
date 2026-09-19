@@ -4,6 +4,7 @@
     <ClCompile Include="entry.cpp" />
     <ClCompile Include="MapGlyphAtlas.cpp" />
     <ClCompile Include="service\MapFontService.cpp" />
+    <ClCompile Include="service\MapFontPlatform.cpp" />
     <ClCompile Include="service\AddonRenderer.cpp" />
     <ClCompile Include="service\MapLoaderService.cpp" />
     <ClCompile Include="service\MapInventory.cpp" />
@@ -21,6 +22,7 @@
     <ClInclude Include="mumble\Mumble.h" />
     <ClInclude Include="Constants.h" />
     <ClInclude Include="MapGlyphAtlas.h" />
+    <ClInclude Include="MapGlyphPolicy.h" />
     <ClInclude Include="MapFontPreparation.h" />
     <ClInclude Include="MapCache.h" />
     <ClInclude Include="FontFallback.h" />

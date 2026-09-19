@@ -4,8 +4,18 @@
 
 #include <filesystem>
 #include <fstream>
+#include <set>
 
 using CachedMaps = std::map<int, gw2api::continents::map>;
+
+// Merge before extracting names for glyph preparation. Superseded cached names
+// must affect neither map publication nor the private atlas.
+inline void appendMissingCachedMaps(std::vector<gw2api::continents::map>& bundled, const CachedMaps& cached) {
+	std::set<int> ids;
+	for (const auto& map : bundled) ids.insert(map.id);
+	for (const auto& [id, map] : cached)
+		if (ids.insert(id).second) bundled.push_back(map);
+}
 
 inline CachedMaps readMapCache(const std::filesystem::path& path) {
 	std::ifstream input(path);

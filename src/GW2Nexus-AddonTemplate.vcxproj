@@ -188,6 +188,7 @@
     <ClInclude Include="Constants.h" />
     <ClInclude Include="FontFallback.h" />
     <ClInclude Include="MapGlyphAtlas.h" />
+    <ClInclude Include="MapGlyphPolicy.h" />
     <ClInclude Include="MapFontPreparation.h" />
     <ClInclude Include="MapCache.h" />
     <ClInclude Include="service\MapFontService.h" />
@@ -220,6 +221,7 @@
     <ClCompile Include="entry.cpp" />
     <ClCompile Include="MapGlyphAtlas.cpp" />
     <ClCompile Include="service\MapFontService.cpp" />
+    <ClCompile Include="service\MapFontPlatform.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_demo.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />

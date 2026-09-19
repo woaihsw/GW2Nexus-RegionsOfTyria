@@ -25,20 +25,34 @@ public:
 		std::lock_guard<std::mutex> lock(mutex);
 		incoming.push_back(std::move(batch));
 	}
-	template<typename AddText, typename Prepare, typename Publish>
-	bool advance(AddText addText, Prepare prepare, Publish publish) {
+	template<typename AddText, typename Prepare, typename Covered, typename Publish>
+	bool advance(AddText addText, Prepare prepare, Covered covered, Publish publish) {
+		std::vector<Batch> received;
 		{
 			std::lock_guard<std::mutex> lock(mutex);
-			for (auto& batch : incoming) {
-				for (const auto& map : batch.maps) addText(mapNameText(map));
-				waiting.push_back(std::move(batch));
-			}
-			incoming.clear();
+			received.swap(incoming);
 		}
-		if (!prepare()) return false;
-		for (auto& batch : waiting) publish(std::move(batch));
-		waiting.clear();
-		return true;
+		for (auto& batch : received) {
+			for (const auto& map : batch.maps) addText(mapNameText(map));
+			waiting.push_back(std::move(batch));
+		}
+		prepare();
+		for (auto it = waiting.begin(); it != waiting.end();) {
+			Batch published{it->locale, {}, it->completesLocale};
+			std::vector<gw2api::continents::map> pending;
+			for (auto& map : it->maps) {
+				if (covered(mapNameText(map))) published.maps.push_back(std::move(map));
+				else pending.push_back(std::move(map));
+			}
+			// Locale enumeration can finish with isolated maps still pending.
+			// This allows requests for other, previously unknown map IDs.
+			if (!published.maps.empty() || published.completesLocale) publish(std::move(published));
+			it->completesLocale = false;
+			it->maps = std::move(pending);
+			if (it->maps.empty()) it = waiting.erase(it);
+			else ++it;
+		}
+		return waiting.empty();
 	}
 	// Only after the worker has stopped.
 	void clear() {

@@ -13,7 +13,8 @@ static FallbackTextFont makeTextFont(ImFont* preferred, ImFont* alternate, ImFon
 	const float size = preferred != nullptr ? preferred->FontSize : ImGui::GetFontSize();
 	return { preferred, alternate, nexusFont, ImGui::GetIO().FontDefault,
 		size * ImGui::GetIO().FontGlobalScale,
-		[](float size, bool animation, ImWchar c) { return mapFonts.find(size, animation, c); } };
+		[](float size, bool animation, ImWchar c) { return mapFonts.find(size, animation, c); },
+		false, (ImFont*)NexusLink->FontUI };
 }
 
 std::optional<std::chrono::steady_clock::time_point> popupAnimationStart;
@@ -32,6 +33,27 @@ int expectedFontCount = 30;
 
 Renderer::Renderer() {}
 Renderer::~Renderer() {}
+
+bool Renderer::hostGlyphAvailable(float size, bool animation, ImWchar character) const {
+	// All racial choices sharing this profile must have an actual glyph in the
+	// same fallback chain used at draw time. Never accept ImGui's fallback '?'.
+	const FallbackTextFont common{nullptr, nullptr, nullptr, ImGui::GetIO().FontDefault,
+		size, nullptr, false, (ImFont*)NexusLink->FontUI};
+	if (common.hostGlyph(character)) return true;
+	bool found = false;
+	for (const auto& [name, font] : fonts) {
+		if (!font || font->FontSize * ImGui::GetIO().FontGlobalScale != size) continue;
+		if ((name.find("Anim") != std::string::npos) != animation) continue;
+		ImFont* nexus = name.find("Widget") != std::string::npos ? (ImFont*)NexusLink->FontUI
+			: name.find("Large") != std::string::npos ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
+		auto candidate = common;
+		candidate.preferred = font;
+		candidate.nexus = nexus;
+		if (!candidate.hostGlyph(character)) return false;
+		found = true;
+	}
+	return found;
+}
 
 
 void Renderer::changeCurrentCharacter(std::string c) {
@@ -55,6 +77,7 @@ bool Renderer::isCleared() {
 }
 
 void Renderer::clearFonts() {
+	++fontsRevision;
 	// set flag that *hopefully* stops rendering the fonts
 	fontsLoaded = false;
 	fontsPicked = false;
@@ -71,6 +94,7 @@ void Renderer::clearFonts() {
 }
 
 void Renderer::registerFont(std::string name, ImFont* font) {
+	++fontsRevision;
 #ifndef NDEBUG
 	APIDefs->Log(ELogLevel_TRACE, ADDON_NAME, ("Registering font: " + name).c_str());
 	APIDefs->Log(ELogLevel_TRACE, ADDON_NAME, font->GetDebugName());
@@ -208,7 +232,7 @@ void Renderer::postRender(ImGuiIO& io) {
 }
 
 void Renderer::render() {
-	if (unloading.load() || !mapFonts.ready() || !fontsLoaded) return;
+	if (unloading.load() || !fontsLoaded) return;
 	try {
 		renderSampleInfo();
 		renderSectorInfo();
@@ -309,6 +333,7 @@ void Renderer::renderMinimapWidget() {
 	std::string output = fontSettings->widgetDisplayFormat;
 	output = replacePlaceholderTexts(output, false);
 	const FallbackTextFont widgetFont = makeTextFont(fontWidget, nullptr, (ImFont*)NexusLink->FontUI);
+	if (!widgetFont.covers(output.c_str())) return;
 	const ImVec2 textSize = widgetFont.measure(output.c_str());
 	auto drawWidgetText = [&](const ImVec4& color) {
 		widgetFont.draw(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(),
@@ -639,6 +664,7 @@ void Renderer::renderTextAnimation(const char* text, float opacityOverride, bool
 	ImFont* secondary = large ? fontAnimLarge : fontAnimSmall;
 	ImFont* nexusFont = large ? (ImFont*)NexusLink->FontBig : (ImFont*)NexusLink->Font;
 	const FallbackTextFont mainFonts = makeTextFont(main, nullptr, nexusFont);
+	if (!mainFonts.covers(text)) return;
 	const ImVec4 color = isShadow
 		? ImVec4(fontSettings->fontBorderColor[0], fontSettings->fontBorderColor[1], fontSettings->fontBorderColor[2], opacityOverride)
 		: ImVec4(fontSettings->fontColor[0], fontSettings->fontColor[1], fontSettings->fontColor[2], opacityOverride);

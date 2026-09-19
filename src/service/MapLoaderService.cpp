@@ -127,12 +127,11 @@ std::string MapLoaderService::performRequest(std::string uri) {
 }
 
 void MapLoaderService::initializeMapStorage() {
-	// Before starting the worker: fold cached map names into the first atlas.
+	// Keep raw cache data separate from effective names and glyph requirements.
 	for (const auto& locale : SUPPORTED_LOCAL) {
 		try {
 			auto& maps = cachedMaps[locale];
 			maps = readMapCache(fs::path(getAddonFolder()) / ("api_maps_" + locale + ".json"));
-			for (const auto& [id, map] : maps) mapFonts.addText(mapNameText(map));
 		}
 		catch (const std::exception& error) {
 			APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Ignoring invalid API map cache: " + std::string(error.what())).c_str());
@@ -160,6 +159,7 @@ void MapLoaderService::publishPreparedMaps() {
 	fontPreparation.advance(
 		[](const std::string& text) { mapFonts.addText(text); },
 		[] { return mapFonts.prepare(); },
+		[](const std::string& text) { return mapFonts.textReady(text); },
 		[this](MapFontPreparation::Batch batch) {
 			std::lock_guard<std::mutex> lock(requestMutex);
 			for (auto& map : batch.maps) {
@@ -368,7 +368,6 @@ void MapLoaderService::loadAllMapsFromStorage() {
 void MapLoaderService::loadMapsFromStorage(std::string lang) {
 	if (unloading.load() || mapInventory->isLocaleLoaded(lang)) return;
 	MapFontPreparation::Batch batch{lang, {}, true};
-	std::set<int> bundledIds;
 	try {
 		std::ifstream dataFile(fs::path(getAddonFolder()) / (lang + ".json"));
 		if (dataFile) {
@@ -376,7 +375,6 @@ void MapLoaderService::loadMapsFromStorage(std::string lang) {
 			auto region = document.get<gw2::region>();
 			for (auto& [id, map] : region.maps) {
 				if (unloading.load()) return;
-				bundledIds.insert(map.id);
 				batch.maps.push_back(std::move(map));
 			}
 		}
@@ -385,8 +383,12 @@ void MapLoaderService::loadMapsFromStorage(std::string lang) {
 		APIDefs->Log(ELogLevel_WARNING, ADDON_NAME, ("Could not read bundled maps: " + std::string(error.what())).c_str());
 	}
 	// An updated bundled map takes precedence over an older API cache entry.
-	for (const auto& [id, map] : cachedMaps[lang]) {
-		if (!bundledIds.contains(id)) batch.maps.push_back(map);
+	appendMissingCachedMaps(batch.maps, cachedMaps[lang]);
+	{
+		std::lock_guard<std::mutex> lock(requestMutex);
+		// An isolated cache/bundled map must not be fetched repeatedly while its
+		// names wait for coverage. Publication clears each corresponding key.
+		for (const auto& map : batch.maps) pendingMaps.insert(lang + ":" + std::to_string(map.id));
 	}
 	if (!unloading.load()) fontPreparation.submit(std::move(batch));
 }

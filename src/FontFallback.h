@@ -2,6 +2,7 @@
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
+#include "MapGlyphPolicy.h"
 
 #include <initializer_list>
 
@@ -16,22 +17,35 @@ struct FallbackTextFont {
 	float size;
 	MapGlyphLookup mapGlyph = nullptr;
 	bool animation = false;
+	ImFont* sharedFallback = nullptr;
+
+	ImFont* hostGlyph(ImWchar character) const {
+		for (ImFont* font : { preferred, alternate, nexus, nexusDefault, sharedFallback })
+			if (font && font->IsLoaded() && font->FindGlyphNoFallback(character)) return font;
+		return nullptr;
+	}
 
 	ImFont* forGlyph(ImWchar character) const {
 		// Native-size non-Latin glyphs take precedence over scaled host fallbacks.
-		if (character >= 0x2E80 && mapGlyph) {
+		if (needsNativeMapGlyph(character) && mapGlyph) {
 			if (ImFont* font = mapGlyph(size, animation, character)) return font;
 		}
-		ImFont* firstLoaded = nullptr;
-		for (ImFont* font : { preferred, alternate, nexus, nexusDefault }) {
-			if (font == nullptr || !font->IsLoaded()) continue;
-			if (firstLoaded == nullptr) firstLoaded = font;
-			if (font->FindGlyphNoFallback(character) != nullptr) return font;
-		}
+		if (ImFont* font = hostGlyph(character)) return font;
 		if (mapGlyph) {
 			if (ImFont* font = mapGlyph(size, animation, character)) return font;
 		}
-		return firstLoaded;
+		return nullptr;
+	}
+
+	bool covers(const char* text) const {
+		for (const char* p = text; *p;) {
+			int length = 0;
+			const ImWchar c = decode(p, length);
+			if (length <= 0) return false;
+			p += length;
+			if (c >= 0x80 && !forGlyph(c)) return false;
+		}
+		return true;
 	}
 
 	static ImWchar decode(const char* text, int& length) {

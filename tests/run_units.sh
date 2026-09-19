@@ -25,8 +25,11 @@ PY
 g++ -std=c++20 -O2 -pthread -Wall -Wextra \
   -I "$root/src" -I "$root/tests/third_party" \
   "$root/tests/map_font_units.cpp" "$root/src/MapGlyphAtlas.cpp" \
-  "$root/src/service/MapInventory.cpp" \
+  "$root/src/service/MapInventory.cpp" "$root/src/service/MapFontService.cpp" \
   "$root/src/imgui/imgui.cpp" "$root/src/imgui/imgui_draw.cpp" \
   "$root/src/imgui/imgui_tables.cpp" "$root/src/imgui/imgui_widgets.cpp" \
   -o "$font_test_dir/map_font_units"
-"$font_test_dir/map_font_units" "$font" "$font_test_dir/seed.txt" "$latin_font"
+"$font_test_dir/map_font_units" "$font" "$font_test_dir/seed.txt" "$latin_font" "${ROT_TEST_CJK_SECONDARY_FONT:-$font}"
+if [[ -n "${ROT_TEST_MS_FONT_DIR:-}" ]]; then
+  "$font_test_dir/map_font_units" "$ROT_TEST_MS_FONT_DIR/msyh.ttc" "$font_test_dir/seed.txt" "$latin_font" "$ROT_TEST_MS_FONT_DIR/simsun.ttc"
+fi

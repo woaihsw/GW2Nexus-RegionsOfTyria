@@ -171,7 +171,7 @@ void AddonLoad(AddonAPI* aApi)
 		StoreSettings();
 	}
 
-	mapFonts.initialize(getAddonFolder());
+	mapFonts.initialize();
 	mapLoader.initializeMapStorage();
 
 	// Add an options window and a regular render callback - always do this at the end I guess
